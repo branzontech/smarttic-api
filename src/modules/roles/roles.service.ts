@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateRoleDto } from 'src/modules/roles/dto/create-role.dto';
@@ -18,101 +18,123 @@ export class RolesService {
   async create(createRoleDto: CreateRoleDto): Promise<Role> {
     try {
       const existingRole = await this.roleRepository.findOne({
-        where: { name: createRoleDto.name, deletedAt: null },
+        where: { name: createRoleDto.name },
       });
-  
+
       if (existingRole) {
-        throw new Error(`El rol '${createRoleDto.name}' ya existe.`);
+        throw new ConflictException(`El rol '${createRoleDto.name}' ya existe.`);
       }
+
       const role = this.roleRepository.create(createRoleDto);
       const savedRole = await this.roleRepository.save(role);
+
       await this.cacheManager.delCache(`roles:*`);
       return savedRole;
     } catch (error) {
       console.error('Error creating role log:', error.message);
-      throw error;
+      throw new InternalServerErrorException('Error al crear el rol');
     }
   }
 
-  async findAll(skip: number = 0, take: number = 10) {
-    const cacheKey = `roles:skip:${skip}:take:${take}`;
-
-    const cachedData = await this.cacheManager.getCache<{
-      data: any[];
-      total: number;
-    }>(cacheKey);
+  async findAll(skip: number = 0, take: number = 10, filter?: string) {
+    const cacheKey = `roles:skip:${skip}:take:${take}:filter:${filter || ''}`;
+  
+    const cachedData = await this.cacheManager.getCache<{ data: any[]; total: number }>(cacheKey);
     if (cachedData) return cachedData;
-
-    const [roles, total] = await this.roleRepository.findAndCount({
-      where: { deletedAt: null },
-      skip,
-      take,
-    });
-
-    const result = {
-      data: { roles, total },
-      message: 'Role List',
-    };
-
+  
+    const queryBuilder = this.roleRepository.createQueryBuilder('role');
+  
+    if (filter) {
+      queryBuilder.andWhere('role.name ILIKE :filter', {
+        filter: `%${filter}%`,
+      });
+    }
+  
+    queryBuilder.skip(skip).take(take);
+  
+    const [roles, total] = await queryBuilder.getManyAndCount();
+  
+    const result = { data:roles, total };
+  
     await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
-
+  
     return result;
   }
+  
 
-  async findById(id: string) {
-    const cacheKey = `role:${id}`;
+  async findAllAvailable() {
+    const cacheKey = `roles:available`;
 
-    const cachedRole = await this.cacheManager.getCache<any>(cacheKey);
-    if (cachedRole) return cachedRole;
+    const cachedData = await this.cacheManager.getCache<{ data: any[]; total: number }>(cacheKey);
+    if (cachedData) return cachedData;
 
-    const role = await this.roleRepository.findOne({
-      where: { id, deletedAt: null }
+    const roles = await this.roleRepository.find({
+      select: {
+        name: true
+      }
+      
     });
 
-    if (!role) {
-      throw new NotFoundException(`Role with id ${id} not found`);
-    }
+    
 
-    await this.cacheManager.setCache(cacheKey, role, CACHE_TTL);
+    await this.cacheManager.setCache(cacheKey, roles, CACHE_TTL);
 
-    return role;
+    return roles;
   }
 
-  async update(id: string, role: UpdateRoleDto) {
+  async findById(id: string): Promise<Role> {
+      try {
+        const cacheKey = `role:${id}`;
+
+        const cachedRole = await this.cacheManager.getCache<Role>(cacheKey);
+        if (cachedRole) return cachedRole;
+    
+        const role = await this.roleRepository.findOne({ where: { id } });
+    
+        if (!role) {
+          throw new NotFoundException(`Role with id ${id} not found`);
+        }
+    
+        await this.cacheManager.setCache(cacheKey, role, CACHE_TTL);
+        return role;
+      } catch (error) {
+        console.error('Error in findById:', error);
+        throw new InternalServerErrorException('Could not retrieve the Role.');
+      }
+    }
+
+  async update(id: string, roleDto: UpdateRoleDto): Promise<Role> {
     try {
-      const existingRole = await this.roleRepository.findOne({ where: { id, deletedAt: null } });
+      const existingRole = await this.roleRepository.findOne({ where: { id } });
       if (!existingRole) {
         throw new NotFoundException(`Role with id ${id} not found`);
       }
 
-      const updatedRole = await this.roleRepository.save({
-        ...existingRole,
-        ...role,
-      });
+      const updatedRole = await this.roleRepository.save({ ...existingRole, ...roleDto });
 
       await this.cacheManager.delCache(`role:${id}`);
+      await this.cacheManager.delCache(`roles:*`);
 
       return updatedRole;
     } catch (error) {
-      throw new NotFoundException(`Role with id ${id} not found`);
+      console.error('Error updating role log:', error.message);
+      throw new InternalServerErrorException(`Error al actualizar el rol con id ${id}`);
     }
   }
 
-  async remove(id: string) {
+  async remove(id: string): Promise<void> {
     try {
-      const existingRole = await this.roleRepository.findOne({ where: { id, deletedAt: null } });
+      const existingRole = await this.roleRepository.findOne({ where: { id } });
       if (!existingRole) {
         throw new NotFoundException(`Role with id ${id} not found`);
       }
 
-      existingRole.deletedAt = new Date();
-      const deletedRole = await this.roleRepository.save(existingRole);
-
+      await this.roleRepository.softDelete(id);
       await this.cacheManager.delCache(`role:${id}`);
-
-      return deletedRole;
+      await this.cacheManager.delCache(`roles:*`);
     } catch (error) {
-      throw new NotFoundException(`Role with id ${id} not found`);
+      console.error('Error deleting role log:', error.message);
+      throw new InternalServerErrorException(`Error al eliminar el rol con id ${id}`);
     }
   }
 }

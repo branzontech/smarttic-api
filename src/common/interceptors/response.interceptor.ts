@@ -19,13 +19,13 @@ import { LoggerHelper } from 'src/common/helpers/logger.helper';
           const response = context.switchToHttp().getResponse();
           const statusCode = response.statusCode || 200;
           const request = context.switchToHttp().getRequest<Request>();
-          this.loggerHelper.logRequest(request, 'SUCCESS  1', data?.message || 'Success');
+          this.loggerHelper.logRequest(request, 'SUCCESS', data?.message || 'Success');
 
           return {
             status: true, 
             statusCode,
             message:  data?.message || 'Success', 
-            data: !data?.data ? data : data.data, 
+            resultData: data , 
             timestamp: new Date().toISOString(),
           };
         }),

@@ -7,14 +7,27 @@ import { UsersService } from 'src/modules/users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import { compare } from 'bcrypt';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
+import { RolesService } from '../roles/roles.service';
+import { EmailService } from 'src/common/email/email.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly usersService: UsersService,
+    private readonly rolesService: RolesService,
     private readonly jwtService: JwtService,
     private readonly cacheManagerService: CacheManagerService,
+    private readonly emailservice: EmailService,
   ) {}
+  
+  async getRoles() {
+    const roles = await this.rolesService.findAllAvailable();
+    if (!roles) throw new NotFoundException('No roles found');
+    return {
+      message: 'Roles retrieved successfully',
+      data: roles,
+    };
+  }
 
   async logIn(username: string, pass: string) {
     const user = await this.usersService.findByUsername(username);
@@ -88,5 +101,9 @@ export class AuthService {
   async logout(userId: string) {
     await this.cacheManagerService.delSession(`refresh_${userId}`);
     return { message: 'User logged out successfully' };
+  }
+
+  async sendEmail(to:string, subject:string, templateName:string, context: Record<string, any>){
+    await this.emailservice.sendEmail(to, subject, templateName, context);
   }
 }

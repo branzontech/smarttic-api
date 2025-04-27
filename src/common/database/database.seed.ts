@@ -35,7 +35,7 @@ export async function seedDatabase(dataSource: DataSource) {
   const cedulaType = await identificationTypeRepository.findOne({ where: { code: 'CC' } });
 
   if (superAdminRole && cedulaType) {
-    const hashedPassword = await bcrypt.hash('superadmin123', 10); // Cambia la contraseña según sea necesario
+    const hashedPassword = await bcrypt.hash('superadmin123', 10); // Cambia la contraseña según sea necesario 
 
     const superAdminUser = userRepository.create({
       name: 'Super',
@@ -44,7 +44,7 @@ export async function seedDatabase(dataSource: DataSource) {
       address: 'Calle 123',
       phone: 1234567890,
       identificationTypeId: cedulaType.id,
-      numberIdentification: 123456789,
+      numberIdentification: "123456789",
       username: 'superadmin',
       password: hashedPassword,
       roleId: superAdminRole.id,

@@ -26,8 +26,8 @@ export class AuditsService {
     }
   }
 
-  async findAll(skip: number = 0, take: number = 10) {
-    const cacheKey = `audits:skip:${skip}:take:${take}`;
+  async findAll(skip: number = 0, take: number = 10, filter?: string) {
+    const cacheKey = `audits:skip:${skip}:take:${take}:filter:${filter || ''}`;
 
     // Verificar si los datos están en caché
     const cachedData = await this.cacheManager.getCache<{
@@ -43,7 +43,7 @@ export class AuditsService {
 
     
     const result = {
-      data: { audits, total },
+      data:  audits, total,
       message: 'Audit List',
     };
 

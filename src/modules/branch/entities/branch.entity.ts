@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn, DeleteDateColumn } from 'typeorm';
 import { User } from 'src/modules/users/entities/user.entity';
 import { AssignedUserBranch } from 'src/modules/assigned-user-branch/entities/assigned-user-branch.entity';
 
@@ -28,7 +28,7 @@ export class Branch {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @DeleteDateColumn()
   deletedAt?: Date;
 }
 

@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn, DeleteDateColumn } from 'typeorm';
 import { User } from 'src/modules/users/entities/user.entity';
 import { Permission } from 'src/modules/permissions/entities/permission.entity';
+import { AssignedMenuRole } from 'src/modules/assigned-menu-role/entities/assigned-menu-role.entity';
 
 @Entity('Roles')
 export class Role {
@@ -28,13 +29,16 @@ export class Role {
   @OneToMany(() => Permission, (permission) => permission.role)
   permissions: Permission[];
 
+  @OneToMany(() => AssignedMenuRole, assignedMenuRole => assignedMenuRole.menu)
+  assignedMenuRoles: AssignedMenuRole[];
+
   @CreateDateColumn()
   createdAt: Date;
 
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @DeleteDateColumn()
   deletedAt?: Date;
 }
 

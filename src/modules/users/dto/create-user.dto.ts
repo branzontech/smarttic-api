@@ -6,6 +6,7 @@ import {
   IsUUID,
   IsBoolean,
   IsNumber,
+  IsArray,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -23,10 +24,29 @@ export class CreateUserDto {
     description: 'The lastname of the user',
     type: String,
     example: 'Doe',
-    required: true,
+    required: false,
   })
   @IsString({ message: 'The lastname must be a string.' })
   lastname: string;
+
+  @ApiProperty({
+    description: 'The companyname of the user',
+    type: String,
+    example: 'Company Inc.',
+    required: false,
+  })
+  @IsString({ message: 'The companyname must be a string.' })
+  companyname: string;
+
+  @ApiPropertyOptional({
+    description: 'The companyId type ID for the user',
+    type: String,
+    example: '1a2b3c4d-5e6f-7g8h-9i0j-1k2l3m4n5o6p',
+    required: false,
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'The companyId must be a valid UUID.' })
+  companyId?: string;
 
   @ApiProperty({
     description: 'The address of the user',
@@ -99,14 +119,14 @@ export class CreateUserDto {
 
   @ApiPropertyOptional({
     description: 'The identification number for the user',
-    type: Number,
-    example: 123456789,
+    type: String,
+    example: "123456789",
     required: false,
   })
   @IsOptional()
-  @IsNumber({}, { message: 'The numberIdentification must be a number.' })
-  numberIdentification?: number;
-
+  @IsString({ message: 'The numberIdentification must be a string.' })
+  numberIdentification?: string;
+ 
   @ApiPropertyOptional({
     description: 'The branch ID for the user',
     type: String,
@@ -116,6 +136,17 @@ export class CreateUserDto {
   @IsOptional()
   @IsUUID('4', { message: 'The branchId must be a valid UUID.' })
   branchId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Array of branch IDs for the user',
+    type: [String],
+    example: ['a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p', 'z9y8x7w6-v5u4-t3s2-r1q0-p0o9n8m7l6k5'],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true, message: 'Each branch ID must be a valid UUID.' })
+  branches?: string[];
 
   @ApiPropertyOptional({
     description: 'Indicates if the user is a default agent',

@@ -6,14 +6,14 @@ import { HttpCatchErrorFilter } from 'src/common/filters/http-catch-error.filter
 import { ResponseInterceptor } from 'src/common/interceptors/response.interceptor';
 import { GLOBAL_PREFIX } from 'src/common/constants';
 import { LoggerHelper } from 'src/common/helpers/logger.helper';
-import { Repository } from 'typeorm';
-import { Audit } from './modules/audits/entities/audit.entity';
-
+import { json, urlencoded } from 'express';
 
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-
+  app.use(json({ limit: '5mb' })); // Aumenta el límite para JSON
+  app.use(urlencoded({ extended: true, limit: '5mb' })); // Aumenta el límite para URL-encoded
+  
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -29,8 +29,8 @@ async function bootstrap() {
 
   // Configurar Swagger
   const config = new DocumentBuilder()
-    .setTitle('API Branzontech Ticket')
-    .setDescription('Documentation API Branzontech Ticket')
+    .setTitle('API Branzontech Ticket v1.0')
+    .setDescription('Documentation API Branzontech Ticket v1.0')
     .setVersion('1.0')
     .addBearerAuth(
       {
@@ -47,6 +47,11 @@ async function bootstrap() {
     operationIdFactory: (controllerKey: string, methodKey: string) =>
       `${GLOBAL_PREFIX}/${controllerKey}.${methodKey}`,
   });
+
+  document.tags = [
+    { name: 'Auth', description: 'Authentication endpoints' }, 
+    ...document.tags.filter(tag => tag.name !== 'Auth')
+  ];
 
   SwaggerModule.setup(`swagger`, app, document);
 

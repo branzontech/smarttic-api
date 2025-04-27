@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -26,208 +27,119 @@ export class AssignedUserBranchService {
     private readonly cacheManager: CacheManagerService,
   ) {}
 
-  // Crear una asignación de usuario a sucursal
-  async create(assignedUserBranchDto: CreateAssignedUserBranchDto) {
+  async create(dto: CreateAssignedUserBranchDto) {
     try {
-      const { userId, branchId } = assignedUserBranchDto;
+      const { userId, branchId } = dto;
+      const user = await this.getUserById(userId);
+      const branch = await this.getBranchById(branchId);
 
-      // Verificar si el usuario existe
-      const user = await this.userRepository.findOne({
-        where: { id: userId, deletedAt: null },
-        relations: ['role'], // Incluir la relación con Role
-      });
-      if (!user) {
-        throw new NotFoundException(`User with id ${userId} not found`);
-      }
-
-      // Verificar si la sucursal existe
-      const branch = await this.branchRepository.findOne({
-        where: { id: branchId, deletedAt: null },
-      });
-      if (!branch) {
-        throw new NotFoundException(`Branch with id ${branchId} not found`);
-      }
-
-      // Validar el rol del usuario
       this.validateUserRole(user.role);
+      await this.ensureAssignmentDoesNotExist(userId, branchId);
 
-      // Verificar si la asignación ya existe
-      const exist = await this.assignedUserBranchRepository.findOne({
-        where: { userId, branchId, deletedAt: null },
-      });
-      if (exist) {
-        throw new BadRequestException(
-          `User with id ${userId} is already assigned to branch with id ${branchId}`,
-        );
-      }
+      const assignedUserBranch = this.assignedUserBranchRepository.create({ userId, branchId });
+      const savedAssignedUserBranch = await this.assignedUserBranchRepository.save(assignedUserBranch);
 
-      // Crear la asignación
-      const newAssignedUserBranch = this.assignedUserBranchRepository.create({
-        userId,
-        branchId,
-      });
-      const savedAssignedUserBranch =
-        await this.assignedUserBranchRepository.save(newAssignedUserBranch);
-
-      // Limpiar la caché
-      await this.cacheManager.delCache(`assignedUserBranches:*`);
-
+      await this.cacheManager.delCache('assignedUserBranches:*');
       return savedAssignedUserBranch;
     } catch (error) {
-      if (error instanceof NotFoundException || error instanceof BadRequestException) {
-        throw error;
-      }
-      throw new BadRequestException(
-        'Error creating assigned user branch. Ensure the data is valid.',
-      );
+      throw new InternalServerErrorException(`Error creating AssignedUserBranch: ${error.message}`);
     }
   }
 
-  // Obtener todas las asignaciones
-  async findAll(skip: number = 0, take: number = 10) {
-    const cacheKey = `assignedUserBranches:skip:${skip}:take:${take}`;
+  async findAll(skip: number = 0, take: number = 10, filter?: string) {
+    try {
+      const cacheKey = `assignedUserBranches:skip:${skip}:take:${take}:filter:${filter || ''}`;
+      const cachedData = await this.cacheManager.getCache(cacheKey);
+      if (cachedData) return cachedData;
 
-    // Verificar si los datos están en caché
-    const cachedData = await this.cacheManager.getCache<{
-      data: any[];
-      total: number;
-    }>(cacheKey);
-    if (cachedData) return cachedData;
-
-    // Obtener las asignaciones de la base de datos
-    const [assignedUserBranches, total] =
-      await this.assignedUserBranchRepository.findAndCount({
-        where: { deletedAt: null },
-        relations: ['user', 'branch'], // Incluir las relaciones con User y Branch
+      const [assignedUserBranches, total] = await this.assignedUserBranchRepository.findAndCount({
+        relations: ['user', 'branch'],
         skip,
         take,
       });
 
-    const result = {
-      data: { assignedUserBranches, total },
-      message: 'Assigned User Branches List',
-    };
-
-    // Almacenar en caché
-    await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
-
-    return result;
+      const result = { data: assignedUserBranches, total , message: 'Assigned User Branches List' };
+      await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
+      return result;
+    } catch (error) {
+      throw new InternalServerErrorException(`Error fetching AssignedUserBranches: ${error.message}`);
+    }
   }
 
-  // Obtener una asignación por ID
-  async findById(id: string) {
-    const cacheKey = `assignedUserBranch:${id}`;
+  async findById(id: string): Promise<AssignedUserBranch> {
+    try {
+      const cacheKey = `assignedUserBranch:${id}`;
+      const cachedAssignedUserBranch = await this.cacheManager.getCache<AssignedUserBranch>(cacheKey);
+      if (cachedAssignedUserBranch) return cachedAssignedUserBranch;
 
-    // Verificar si la asignación está en caché
-    const cachedAssignedUserBranch =
-      await this.cacheManager.getCache<any>(cacheKey);
-    if (cachedAssignedUserBranch) return cachedAssignedUserBranch;
-
-    // Obtener la asignación de la base de datos
-    const assignedUserBranch = await this.assignedUserBranchRepository.findOne({
-      where: { id },
-      relations: ['user', 'branch'], // Incluir las relaciones con User y Branch
-    });
-
-    if (!assignedUserBranch) {
-      throw new NotFoundException(`AssignedUserBranch with id ${id} not found`);
+      const assignedUserBranch = await this.getAssignedUserBranchById(id);
+      await this.cacheManager.setCache(cacheKey, assignedUserBranch, CACHE_TTL);
+      return assignedUserBranch;
+    } catch (error) {
+      throw new InternalServerErrorException(`Error fetching AssignedUserBranch with id ${id}: ${error.message}`);
     }
+  }
 
-    // Almacenar en caché
-    await this.cacheManager.setCache(cacheKey, assignedUserBranch, CACHE_TTL);
+  async update(id: string, dto: UpdateAssignedUserBranchDto): Promise<AssignedUserBranch> {
+    try {
+      const existingAssignedUserBranch = await this.getAssignedUserBranchById(id);
+      if (dto.userId) this.validateUserRole((await this.getUserById(dto.userId)).role);
 
+      const updatedAssignedUserBranch = await this.assignedUserBranchRepository.save({
+        ...existingAssignedUserBranch,
+        ...dto,
+      });
+
+      await this.cacheManager.delCache(`assignedUserBranch:${id}`);
+      await this.cacheManager.delCache(`assignedUserBranches:*`);
+      return updatedAssignedUserBranch;
+    } catch (error) {
+      throw new InternalServerErrorException(`Error updating AssignedUserBranch with id ${id}: ${error.message}`);
+    }
+  }
+
+  async remove(id: string): Promise<void> {
+    try {
+      const assignedUserBranch = await this.getAssignedUserBranchById(id);
+      await this.assignedUserBranchRepository.softDelete(id);
+      
+      await this.cacheManager.delCache(`assignedUserBranch:${id}`);
+      await this.cacheManager.delCache(`assignedUserBranches:*`);
+    } catch (error) {
+      throw new InternalServerErrorException(`Error deleting AssignedUserBranch with id ${id}: ${error.message}`);
+    }
+  }
+
+  private async getUserById(userId: string): Promise<User> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: ['role'],
+    });
+    if (!user) throw new NotFoundException(`User with id ${userId} not found`);
+    return user;
+  }
+
+  private async getBranchById(branchId: string): Promise<Branch> {
+    const branch = await this.branchRepository.findOne({ where: { id: branchId } });
+    if (!branch) throw new NotFoundException(`Branch with id ${branchId} not found`);
+    return branch;
+  }
+
+  private async getAssignedUserBranchById(id: string): Promise<AssignedUserBranch> {
+    const assignedUserBranch = await this.assignedUserBranchRepository.findOne({ where: { id } });
+    if (!assignedUserBranch) throw new NotFoundException(`AssignedUserBranch with id ${id} not found`);
     return assignedUserBranch;
   }
 
-  // Actualizar una asignación
-  async update(id: string, assignedUserBranchDto: UpdateAssignedUserBranchDto) {
-    try {
-      const existingAssignedUserBranch =
-        await this.assignedUserBranchRepository.findOne({ where: { id, deletedAt: null } });
-      if (!existingAssignedUserBranch) {
-        throw new NotFoundException(`AssignedUserBranch with id ${id} not found`);
-      }
-
-      // Validar el rol del usuario si se actualiza el userId
-      if (assignedUserBranchDto.userId) {
-        const user = await this.userRepository.findOne({
-          where: { id: assignedUserBranchDto.userId },
-          relations: ['role'], // Incluir la relación con Role
-        });
-        if (!user) {
-          throw new NotFoundException(
-            `User with id ${assignedUserBranchDto.userId} not found`,
-          );
-        }
-        this.validateUserRole(user.role);
-      }
-
-      // Actualizar la asignación
-      const updatedAssignedUserBranch = await this.assignedUserBranchRepository.save(
-        {
-          ...existingAssignedUserBranch,
-          ...assignedUserBranchDto,
-        },
-      );
-
-      // Limpiar la caché
-      await this.cacheManager.delCache(`assignedUserBranch:${id}`);
-
-      return updatedAssignedUserBranch;
-    } catch (error) {
-      throw new NotFoundException(`AssignedUserBranch with id ${id} not found`);
-    }
+  private async ensureAssignmentDoesNotExist(userId: string, branchId: string) {
+    const exist = await this.assignedUserBranchRepository.findOne({ where: { userId, branchId } });
+    if (exist) throw new BadRequestException(`User with id ${userId} is already assigned to branch with id ${branchId}`);
   }
 
-  // Eliminar una asignación (soft delete)
-  async remove(id: string) {
-    try {
-      const existingAssignedUserBranch =
-        await this.assignedUserBranchRepository.findOne({ where: { id, deletedAt: null } });
-      if (!existingAssignedUserBranch) {
-        throw new NotFoundException(`AssignedUserBranch with id ${id} not found`);
-      }
-
-      // Soft delete
-      existingAssignedUserBranch.deletedAt = new Date();
-      const deletedAssignedUserBranch =
-        await this.assignedUserBranchRepository.save(existingAssignedUserBranch);
-
-      // Limpiar la caché
-      await this.cacheManager.delCache(`assignedUserBranch:${id}`);
-
-      return deletedAssignedUserBranch;
-    } catch (error) {
-      throw new NotFoundException(`AssignedUserBranch with id ${id} not found`);
-    }
-  }
-
-  
   private validateUserRole(role: Role) {
-    if (!role.isAgent && !role.isAdmin && !role.isConfigurator) {
-      throw new BadRequestException(
-        'The user does not have a valid role for this operation.',
-      );
-    }
-
-    // Aquí puedes agregar más validaciones específicas según los roles
-    if (role.isAdmin) {
-      throw new BadRequestException(
-        'Admin users cannot be assigned to branches.',
-      );
-    }
-
-    if (role.isConfigurator) {
-      throw new BadRequestException(
-        'Configurator users cannot be assigned to branches.',
-      );
-    }
-
-    // Solo los usuarios con isAgent pueden ser asignados a sucursales
-    if (!role.isAgent) {
-      throw new BadRequestException(
-        'Only users with the agent role can be assigned to branches.',
-      );
-    }
+    if (!role.isAgent && !role.isAdmin && !role.isConfigurator) 
+      throw new BadRequestException('The regular user does not have a valid role for this operation.');
+    
+    if (role.isConfigurator) throw new BadRequestException('Configurator users cannot be assigned to branches.');
   }
 }
