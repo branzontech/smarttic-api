@@ -50,7 +50,7 @@ export class RolesService {
       });
     }
   
-    queryBuilder.skip(skip).take(take);
+      queryBuilder.orderBy('role.createdAt', 'DESC').skip(skip).take(take);
   
     const [roles, total] = await queryBuilder.getManyAndCount();
   

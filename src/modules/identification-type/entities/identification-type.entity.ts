@@ -12,7 +12,7 @@ export class IdentificationType {
   @Column({ unique: true })
   description: string;
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @OneToMany(() => User, (user) => user.identificationType)

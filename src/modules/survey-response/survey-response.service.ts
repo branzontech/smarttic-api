@@ -11,6 +11,7 @@ import { CreateSurveyResponseDto } from 'src/modules/survey-response/dto/create-
 import { UpdateSurveyResponseDto } from 'src/modules/survey-response/dto/update-survey-response.dto';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { CACHE_TTL } from 'src/common/constants';
+import { userSession } from 'src/common/types';
 
 @Injectable()
 export class SurveyResponseService {
@@ -30,35 +31,40 @@ export class SurveyResponseService {
           surveyCalificationId: createSurveyResponseDto.surveyCalificationId,
         },
       });
-
+  
       if (existingResponse) {
         throw new ConflictException(
           'The user has already responded to this survey.',
         );
       }
-
-      const response = this.surveyResponseRepository.create(
-        createSurveyResponseDto,
-      );
+  
+      const response = this.surveyResponseRepository.create(createSurveyResponseDto);
       const saved = await this.surveyResponseRepository.save(response);
-
+  
       await this.cacheManager.delCache('surveyResponses:*');
-
+  
       return saved;
     } catch (error) {
+      if (error instanceof ConflictException) {
+        throw error;
+      }
+  
       console.error('Error in create:', error);
       throw new InternalServerErrorException(
         'Failed to create the survey response.',
       );
     }
   }
+  
 
   async findAll(
+    user: userSession,
     skip: number = 0,
     take: number = 10,
     filter?: string,
   ): Promise<{ data: SurveyResponse[]; total: number }> {
-    const cacheKey = `surveyResponses:skip:${skip}:take:${take}:filter:${filter || ''}`;
+    const { isAdmin, isConfigurator } = user.role;
+    const cacheKey = `surveyResponses:userId:${user.id}:skip:${skip}:take:${take}:filter:${filter || ''}`;
 
     try {
       const cached = await this.cacheManager.getCache<{
@@ -68,18 +74,45 @@ export class SurveyResponseService {
       if (cached) return cached;
 
       const queryBuilder =
-        this.surveyResponseRepository.createQueryBuilder('surveyResponse');
+        this.surveyResponseRepository.createQueryBuilder('surveyResponse')
+        .leftJoinAndSelect('surveyResponse.user', 'user')
+        .leftJoinAndSelect('user.company', 'company')
+        .leftJoinAndSelect('user.branch', 'branch')
+        .leftJoinAndSelect('surveyResponse.ticket', 'ticket')
+        .leftJoinAndSelect('ticket.ticketState', 'ticketState')
+        .leftJoinAndSelect('ticket.ticketTitle', 'ticketTitle')
+        .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
+        .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
+        .leftJoinAndSelect('ticket.assignedUsers', 'assignedUsers', 'assignedUsers.state = true')
+        .leftJoinAndSelect('assignedUsers.user', 'agent')
+        .leftJoinAndSelect('surveyResponse.surveyCalification', 'surveyCalification');
 
       if (filter) {
         queryBuilder.andWhere(
-          'surveyResponse.title ILIKE :filter OR surveyResponse.description ILIKE :filter',
+          `ticketTitle.description ILIKE :filter OR 
+           surveyCalification.title ILIKE :filter OR 
+           ticketPriority.title ILIKE :filter OR
+           branch.name ILIKE :filter OR 
+           CONCAT(ticketCategory.prefix, '-', ticket.ticketNumber) ILIKE :filter OR
+           CONCAT(user.name, ' ', user.lastname) ILIKE :filter OR
+           CONCAT(agent.name, ' ', agent.lastname) ILIKE :filter
+           `,
           {
             filter: `%${filter}%`,
           },
         );
       }
 
-      queryBuilder.skip(skip).take(take);
+      if (isAdmin && !isConfigurator) {
+        queryBuilder.andWhere(
+          `user.branchId = :branchId`,
+          {
+            branchId: `${user.branchId}`,
+          },
+        );
+      }
+
+      queryBuilder.orderBy('surveyResponse.createdAt', 'DESC').skip(skip).take(take);
 
       const [surveyCalifications, total] = await queryBuilder.getManyAndCount();
       const result = { data: surveyCalifications, total };

@@ -80,6 +80,48 @@ export class TicketCategoryController {
     return await this.ticketCategoryService.findAll(skip, take, filter);
   }
 
+  
+
+  @Get('available')
+  @ApiOperation({
+    summary: 'Obtener categorías de tickets disponibles',
+    description:
+      'Devuelve una lista de categorías activas (state=true) con solo su ID y descripción.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de categorías disponibles',
+    schema: {
+      example: [
+        { id: '1', description: 'Soporte Técnico' },
+        { id: '2', description: 'Facturación' },
+        { id: '3', description: 'Categoría Específica' },
+      ],
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', example: '1' },
+          description: { type: 'string', example: 'Soporte Técnico' },
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Error interno del servidor',
+    schema: {
+      example: {
+        statusCode: 500,
+        message: 'No se pudo listar las categorías disponibles',
+        error: 'Internal Server Error',
+      },
+    },
+  })
+  async findAvailable() {
+    return this.ticketCategoryService.findAvailable();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Retrieve a specific ticket category by ID' })
   @ApiParam({

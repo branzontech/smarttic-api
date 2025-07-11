@@ -18,7 +18,7 @@ export class TicketPriority {
   @Column({ nullable: true })
   hoursResolution: number;
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @OneToMany(() => TicketTitle, (title) => title.ticketPriority)

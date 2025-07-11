@@ -35,7 +35,7 @@ export class AssignedUserTicketController {
   ) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create a new assigned user ticket' })
+  @ApiOperation({ summary: 'Assigned a new user to ticket' })
   @ApiBody({ type: CreateAssignedUserTicketDto })
   @ApiResponse({ status: 201, description: 'Assigned user ticket created successfully.' })
   @ApiResponse({ status: 400, description: 'Invalid input data.' })

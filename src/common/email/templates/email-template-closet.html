@@ -160,14 +160,18 @@
         }
         
         .feedback-button {
-            display: inline-block;
-            padding: 8px 16px;
-            background-color: #f5f5f5;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            background-color: #ffffff;
             border: 1px solid #ddd;
-            border-radius: 20px;
+            border-radius: 25px;
             color: #333;
             text-decoration: none;
-            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            font-weight: 500;
+            transition: all 0.2s ease-in-out;
         }
         
         .feedback-button:hover {
@@ -175,6 +179,7 @@
             border-color: #bfef37;
             color: #0a2c35;
         }
+        
     </style>
 </head>
 <body>
@@ -206,36 +211,16 @@
         
         <div class="message">
             <h3>Estimado(a) {{fullname}},</h3>
-            <p>Le informamos que su ticket ha sido actualizado. Un técnico ha sido asignado y está trabajando actualmente en su solicitud.</p>
-            <p>Comentario del técnico: <em>"He revisado el problema. Se necesitará reemplazar el cartucho de tóner. Visitaré su departamento mañana a las 10:00 AM para realizar el cambio."</em></p>
-            <p>Si desea agregar más información o verificar el estado actual de su ticket, por favor haga clic en el botón a continuación:</p>
-            
-            <a href="{{baseUrl}}/ticket/detail/{{ticketId}}" class="button">Ver Detalles del Ticket</a>
+            <p>Su opinión es muy importante para nosotros. Le invitamos a calificar el servicio recibido haciendo clic en el siguiente enlace o respondiendo a este mensaje con su valoración</p>
             
             <div class="survey-section">
-                <h3>Califique nuestro servicio</h3>
-                <p>Su opinión es muy importante para nosotros. Por favor, tome un momento para calificar la calidad del servicio recibido:</p>
-                
-                <div class="rating-container">
-                    <div class="rating">
-                        <a href="#" class="star-rating" data-rating="5">★</a>
-                        <a href="#" class="star-rating" data-rating="4">★</a>
-                        <a href="#" class="star-rating" data-rating="3">★</a>
-                        <a href="#" class="star-rating" data-rating="2">★</a>
-                        <a href="#" class="star-rating" data-rating="1">★</a>
-                        <span class="rating-text">Excelente</span>
-                    </div>
-                </div>
-                
                 <div class="feedback-buttons">
-                    <a href="#" class="feedback-button">Muy satisfecho</a>
-                    <a href="#" class="feedback-button">Satisfecho</a>
-                    <a href="#" class="feedback-button">Neutral</a>
-                    <a href="#" class="feedback-button">Insatisfecho</a>
+                    {{ratingButtonsHtml}}
                 </div>
             </div>
-            
-            <p>Si tiene alguna pregunta adicional, no dude en responder a este correo electrónico o contactar directamente a nuestro equipo de soporte.</p>
+            <a href="{{baseUrl}}/tickets/detail/{{ticketId}}" class="button">Ver Detalles del Ticket</a>
+
+            <p>Si experimenta nuevamente el mismo problema o requiere asistencia adicional, no dude en contactarnos y haremos referencia a este caso. Agradecemos su confianza en nuestro equipo.</p>
             
             <p>Atentamente,<br>
             Equipo de Soporte Técnico</p>

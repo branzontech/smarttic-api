@@ -1,7 +1,7 @@
 // typeorm.config.ts
-import { DataSource, DataSourceOptions } from 'typeorm';
+import { DataSource } from 'typeorm';
 import * as dotenv from 'dotenv';
-import { DatabaseType } from "src/common/types";
+import { DatabaseType } from 'src/common/types';
 
 // Cargar variables de entorno desde .env
 dotenv.config({
@@ -20,6 +20,5 @@ const dataSource = new DataSource({
   synchronize: process.env.DATABASE_SYNCHRONIZE === 'true',
   logging: process.env.DATABASE_LOGGING === 'true',
 });
-  
   
 export default dataSource;

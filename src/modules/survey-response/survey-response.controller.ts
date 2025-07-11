@@ -23,11 +23,13 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { AuthzGuard } from 'src/common/guards/authz/authz.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { userSession } from 'src/common/types';
 
 @ApiTags('SurveyResponses')
 @ApiBearerAuth('access-token')
 @UseGuards(AuthzGuard)
-@Controller('survey-response')
+@Controller('surveyResponse')
 export class SurveyResponseController {
   constructor(private readonly surveyResponseService: SurveyResponseService) {}
 
@@ -71,11 +73,12 @@ export class SurveyResponseController {
     description: 'Survey responses successfully retrieved',
   })
   findAll(
+    @CurrentUser() user: userSession,
     @Query('skip', new ParseIntPipe({ optional: true })) skip = 0,
     @Query('take', new ParseIntPipe({ optional: true })) take = 100,
     @Query('filter') filter?: string,
   ) {
-    return this.surveyResponseService.findAll(skip, take, filter);
+    return this.surveyResponseService.findAll(user, skip, take, filter);
   }
 
   @Get(':id')

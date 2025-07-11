@@ -6,6 +6,7 @@ import { TicketCategory } from 'src/modules/ticket-category/entities/ticket-cate
 import { CacheManagerModule } from 'src/common/cache-manager/cache-manager.module';
 import { UsersModule } from 'src/modules/users/users.module';
 
+
 @Module({
   imports: [TypeOrmModule.forFeature([TicketCategory]), CacheManagerModule, UsersModule],
   controllers: [TicketCategoryController],

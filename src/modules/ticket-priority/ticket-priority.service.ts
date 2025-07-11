@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, ConflictException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, InternalServerErrorException, HttpException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Not, Repository } from 'typeorm';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { TicketPriority } from './entities/ticket-priority.entity';
 import { CreateTicketPriorityDto } from './dto/create-ticket-priority.dto';
@@ -31,6 +31,9 @@ export class TicketPriorityService {
       await this.cacheManager.delCache(`ticketPriorities:*`);
       return savedPriority;
     } catch (error) {
+     if (error instanceof ConflictException || error instanceof NotFoundException || error instanceof HttpException) {
+        throw error;
+      }
       console.error('Error en create:', error);
       throw new InternalServerErrorException('No se pudo crear la prioridad de ticket.');
     }
@@ -55,7 +58,7 @@ export class TicketPriorityService {
         });
       }
   
-      queryBuilder.skip(skip).take(take);
+      queryBuilder.orderBy('ticketPriority.createdAt', 'DESC').skip(skip).take(take);
   
       const [priorities, total] = await queryBuilder.getManyAndCount();
   
@@ -90,22 +93,59 @@ export class TicketPriorityService {
     }
   }
 
-  async update(id: string, updateTicketPriorityDto: UpdateTicketPriorityDto): Promise<TicketPriority> {
+  async update(
+    id: string,
+    updateTicketPriorityDto: UpdateTicketPriorityDto,
+  ): Promise<TicketPriority> {
     try {
-      const priority = await this.ticketPriorityRepository.preload({ id, ...updateTicketPriorityDto });
+      // 1. Verificar si la prioridad existe
+      const existingPriority = await this.ticketPriorityRepository.findOne({ 
+        where: { id } 
+      });
 
-      if (!priority) {
-        throw new NotFoundException(`Prioridad de ticket con ID '${id}' no encontrada.`);
+      if (!existingPriority) {
+        throw new NotFoundException(
+          `Prioridad de ticket con ID '${id}' no encontrada.`
+        );
       }
 
-      const updatedPriority = await this.ticketPriorityRepository.save(priority);
+      // 2. Si se está actualizando el título, validar que no exista otro igual
+      if (updateTicketPriorityDto.title) {
+        const priorityWithSameTitle = await this.ticketPriorityRepository.findOne({
+          where: { 
+            title: updateTicketPriorityDto.title,
+            id: Not(id) // Excluir la prioridad actual
+          },
+        });
+
+        if (priorityWithSameTitle) {
+          throw new ConflictException(
+            `La prioridad con título '${updateTicketPriorityDto.title}' ya existe.`
+          );
+        }
+      }
+
+      // 3. Actualizar la prioridad
+      const updatedPriority = await this.ticketPriorityRepository.save({
+        ...existingPriority,
+        ...updateTicketPriorityDto,
+      });
+
+      // 4. Limpiar caché
       await this.cacheManager.delCache(`ticketPriority:${id}`);
       await this.cacheManager.delCache(`ticketPriorities:*`);
 
       return updatedPriority;
     } catch (error) {
+      // Manejar errores conocidos
+      if (error instanceof ConflictException || error instanceof NotFoundException || error instanceof HttpException) {
+        throw error;
+      }
+
       console.error('Error en update:', error);
-      throw new InternalServerErrorException('No se pudo actualizar la prioridad de ticket.');
+      throw new InternalServerErrorException(
+        'No se pudo actualizar la prioridad de ticket.'
+      );
     }
   }
 

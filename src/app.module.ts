@@ -22,6 +22,11 @@ import { SurveyResponseModule } from 'src/modules/survey-response/survey-respons
 import { MenuModule } from './modules/menu/menu.module';
 import { AssignedMenuRoleModule } from './modules/assigned-menu-role/assigned-menu-role.module';
 import { AssignedUserTicketModule } from './modules/assigned-user-ticket/assigned-user-ticket.module';
+import { GeneralParametersModule } from './modules/general-parameters/general-parameters.module';
+import { FormsModule } from './modules/forms/forms.module';
+import { FormFieldsModule } from './modules/form-fields/form-fields.module';
+import { FormResponsesModule } from './modules/form-responses/form-responses.module';
+import { FormResponseFilesModule } from './modules/form-response-files/form-response-files.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -47,7 +52,12 @@ import { AssignedUserTicketModule } from './modules/assigned-user-ticket/assigne
     SurveyResponseModule,
     MenuModule,
     AssignedMenuRoleModule,
-    AssignedUserTicketModule
+    AssignedUserTicketModule,
+    GeneralParametersModule,
+    FormsModule,
+    FormFieldsModule,
+    FormResponsesModule,
+    FormResponseFilesModule
   ],
   controllers: [],
   providers: [

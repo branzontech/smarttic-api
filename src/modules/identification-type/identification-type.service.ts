@@ -55,7 +55,7 @@ export class IdentificationTypeService {
       }
   
       
-      queryBuilder.skip(skip).take(take);
+      queryBuilder.orderBy('identificationType.createdAt', 'DESC').skip(skip).take(take);
   
       const [identificationTypes, total] = await queryBuilder.getManyAndCount();
   

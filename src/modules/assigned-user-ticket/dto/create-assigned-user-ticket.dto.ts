@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsUUID } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
 
 export class CreateAssignedUserTicketDto {
   @ApiProperty({
@@ -19,4 +19,15 @@ export class CreateAssignedUserTicketDto {
   })
   @IsUUID('4', { message: 'The userId must be a valid UUID.' })
   userId: string;
+
+  @ApiPropertyOptional({
+    description: 'The state of the menu',
+    type: Boolean,
+    example: true,
+    default: true,
+    required: false,
+  })
+  @IsOptional()
+  @IsBoolean({ message: 'The state must be a boolean.' })
+  state?: boolean;
 }

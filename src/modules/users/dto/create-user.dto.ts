@@ -11,23 +11,25 @@ import {
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateUserDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'The name of the user',
     type: String,
     example: 'John',
-    required: true,
+    required: false,
   })
+  @IsOptional()
   @IsString({ message: 'The name must be a string.' })
-  name: string;
+  name?: string | null;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'The lastname of the user',
     type: String,
     example: 'Doe',
     required: false,
   })
+  @IsOptional()
   @IsString({ message: 'The lastname must be a string.' })
-  lastname: string;
+  lastname?: string | null;
 
   @ApiProperty({
     description: 'The companyname of the user',
@@ -120,13 +122,13 @@ export class CreateUserDto {
   @ApiPropertyOptional({
     description: 'The identification number for the user',
     type: String,
-    example: "123456789",
+    example: '123456789',
     required: false,
   })
   @IsOptional()
   @IsString({ message: 'The numberIdentification must be a string.' })
   numberIdentification?: string;
- 
+
   @ApiPropertyOptional({
     description: 'The branch ID for the user',
     type: String,
@@ -140,7 +142,10 @@ export class CreateUserDto {
   @ApiPropertyOptional({
     description: 'Array of branch IDs for the user',
     type: [String],
-    example: ['a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p', 'z9y8x7w6-v5u4-t3s2-r1q0-p0o9n8m7l6k5'],
+    example: [
+      'a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p',
+      'z9y8x7w6-v5u4-t3s2-r1q0-p0o9n8m7l6k5',
+    ],
     required: false,
   })
   @IsOptional()

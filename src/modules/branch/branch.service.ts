@@ -52,7 +52,8 @@ export class BranchService {
         );
       }
   
-      queryBuilder.skip(skip).take(take);
+      queryBuilder.orderBy('branch.createdAt', 'DESC').skip(skip).take(take);
+
   
       const [branches, total] = await queryBuilder.getManyAndCount();
   

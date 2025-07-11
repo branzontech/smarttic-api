@@ -25,7 +25,7 @@ export class TicketDetail {
   @Column({ nullable: true })
   userId: string;
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @ManyToOne(() => User, (user) => user.tickets, { nullable: true, onDelete: 'SET NULL' })

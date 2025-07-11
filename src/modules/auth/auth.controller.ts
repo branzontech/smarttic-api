@@ -8,6 +8,7 @@ import {
   ApiResponse 
 } from '@nestjs/swagger';
 import { SendEmailDto } from 'src/common/email/dto/send-email.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 
 @ApiTags('Auth') 
 @Controller('auth')
@@ -42,7 +43,6 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Token refreshed successfully', schema: { type: 'object', properties: { accessToken: { type: 'string' } } } })
   @ApiResponse({ status: 400, description: 'Invalid refresh token' })
   async refresh(@Body('refreshToken') refreshToken: string) {
-    console.log('Refresh token:', refreshToken);
     return await this.authService.refreshAccessToken(refreshToken);
   }
 
@@ -60,8 +60,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'User logged out successfully', schema: { type: 'object', properties: { message: { type: 'string' } } } })
   @ApiResponse({ status: 400, description: 'Invalid user ID' })
   async logout(@Body('userId') userId: string) {
-    await this.authService.logout(userId);
-    return { message: 'User logged out successfully' };
+    return await this.authService.logout(userId);
   }
 
 
@@ -92,5 +91,29 @@ export class AuthController {
   async sendEmail(@Body() dto: SendEmailDto) {
     const { to, subject, templateName, context } = dto;
     return await this.authService.sendEmail(to, subject, templateName, context);
+  }
+
+  @Post('forgotPassword')
+  @ApiOperation({
+    summary: 'Send password reset link',
+    description: 'Send a password reset link to the user\'s email.',
+  })
+  @ApiBody({
+    type: ForgotPasswordDto,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Send link successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'User no found', 
+  })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return await this.authService.sendLinkResetPassword(
+      dto.email,
+      dto.requestIp,
+      dto.requestDevice,
+    );
   }
 }

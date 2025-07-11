@@ -31,7 +31,7 @@ export class Menu {
   @Column()
   orderItem: number;
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @ManyToOne(() => Menu, { nullable: true })

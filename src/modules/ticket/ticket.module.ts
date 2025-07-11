@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TicketService } from 'src/modules/ticket/ticket.service';
 import { TicketController } from 'src/modules/ticket/ticket.controller';
@@ -10,11 +10,20 @@ import { UsersModule } from 'src/modules/users/users.module';
 import { TicketStateModule } from '../ticket-state/ticket-state.module';
 import { EmailModule } from 'src/common/email/email.module';
 import { AssignedUserTicketModule } from '../assigned-user-ticket/assigned-user-ticket.module';
+import { SurveyResponseModule } from '../survey-response/survey-response.module';
+import { TicketDetailModule } from '../ticket-detail/ticket-detail.module';
+import { BranchModule } from '../branch/branch.module';
+import { FormResponsesModule } from '../form-responses/form-responses.module';
+import { FormResponse } from '../form-responses/entities/form-response.entity';
+import { FormResponseFilesModule } from '../form-response-files/form-response-files.module';
+import { FormResponseFile } from '../form-response-files/entities/form-response-file.entity';
+
 
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Ticket, TicketTitle, TicketState]), 
-  UsersModule, CacheManagerModule, TicketStateModule, AssignedUserTicketModule, EmailModule],
+  imports: [ TypeOrmModule.forFeature([Ticket, TicketTitle, TicketState, FormResponse, FormResponseFile]), FormResponseFilesModule,
+  UsersModule, CacheManagerModule, TicketStateModule, AssignedUserTicketModule, BranchModule, FormResponsesModule,
+    forwardRef(() => SurveyResponseModule), EmailModule, forwardRef(() => TicketDetailModule) ],
   controllers: [TicketController],
   providers: [TicketService ],
   exports: [TicketService],

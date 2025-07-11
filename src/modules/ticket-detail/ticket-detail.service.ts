@@ -32,58 +32,58 @@ export class TicketDetailService {
 
   async create(
     createTicketDetailDto: CreateTicketDetailDto,
-  ): Promise<{data: TicketDetail, message: string}> {
-    const queryRunner = this.ticketDetailRepository.manager.connection.createQueryRunner();
-    
+  ): Promise<{ data: TicketDetail; message: string }> {
+    const queryRunner =
+      this.ticketDetailRepository.manager.connection.createQueryRunner();
+
     try {
       await queryRunner.connect();
       await queryRunner.startTransaction();
-  
+
       const { ticketId } = createTicketDetailDto;
-  
+
       // Verificar si existe un TicketDetail asociado al ticketId
       const existingDetail = await queryRunner.manager.findOne(TicketDetail, {
         where: { ticketId },
       });
-  
+
       // Si NO existe, cambiar el estado del ticket al estado con order 2
+      const newState = await this.ticketStateService.findByOrder(2);
       if (!existingDetail) {
-        const newState = await this.ticketStateService.findByOrder(2);
-        
         if (!newState) {
           throw new Error('No se encontró un estado con order 2.');
         }
-  
+
         await queryRunner.manager.update(
           Ticket,
           { id: ticketId },
           { ticketStateId: newState.id },
         );
       }
-  
+
       // Crear y guardar el nuevo TicketDetail
       const detail = queryRunner.manager.create(
         TicketDetail,
         createTicketDetailDto,
       );
       const savedDetail = await queryRunner.manager.save(detail);
-  
+
       const resultData = await this.ticketService.findOne(ticketId);
       const user = await this.userService.findById(resultData.userId);
       if (!user) {
         throw new NotFoundException(`Error finding ticket user.`);
       }
-  
+
       await queryRunner.commitTransaction();
-  
+
       let emailStatus = 'Ticket created successfully';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
-      
+
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
-          ticketState: resultData.ticketState.description,
+          ticketState: newState.title,
           prefix: prefix,
           ticketId: resultData.id,
           ticketNumber: resultData.ticketNumber,
@@ -91,21 +91,22 @@ export class TicketDetailService {
           ticketPriority: priority,
           ticketCreatedAt: resultData.createdAt,
         };
-        
+
         await this.emailService.sendEmail(
           user.email,
           `Actualizado ${prefix}-${resultData.ticketNumber}`,
           'email-template.html',
-          emailData
+          emailData,
         );
       } catch (emailError) {
-        console.log("emailError", emailError)
-        emailStatus = 'Ticket was created successfully, but the email notification could not be sent. Please contact Branzon Tech support';
+        console.log('emailError', emailError);
+        emailStatus =
+          'Ticket was created successfully, but the email notification could not be sent. Please contact Branzon Tech support';
       }
-  
+
       // Limpiar cache después de la transacción
       await this.cacheManager.delCache(`ticketDetails:*`);
-  
+
       return { data: savedDetail, message: emailStatus };
     } catch (error) {
       if (queryRunner.isTransactionActive) {
@@ -145,7 +146,10 @@ export class TicketDetailService {
         });
       }
 
-      queryBuilder.skip(skip).take(take);
+      queryBuilder
+        .orderBy('ticketDetail.createdAt', 'DESC')
+        .skip(skip)
+        .take(take);
 
       const [details, total] = await queryBuilder.getManyAndCount();
 
@@ -190,11 +194,14 @@ export class TicketDetailService {
         cacheKey,
       );
 
-      if (cached) return cached;
+      // if (cached) return cached;
 
       // 1. Obtener el ticket con relaciones
       const ticket = await this.ticketRepository
         .createQueryBuilder('ticket')
+        .leftJoinAndSelect('ticket.formResponse', 'formResponse')
+        .leftJoinAndSelect('formResponse.form', 'form')
+        .leftJoinAndSelect('form.fields', 'fields')
         .leftJoinAndSelect('ticket.ticketState', 'ticketState')
         .leftJoinAndSelect('ticket.ticketTitle', 'ticketTitle')
         .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
@@ -202,7 +209,9 @@ export class TicketDetailService {
         .leftJoinAndSelect('ticket.user', 'user')
         .leftJoinAndSelect('ticket.assignedUsers', 'assignedUsers')
         .leftJoinAndSelect('assignedUsers.user', 'agent')
-        .where('ticket.id = :ticketId', { ticketId })
+        .where('ticket.id = :ticketId AND assignedUsers.state = true', {
+          ticketId,
+        })
         .getOne();
 
       if (!ticket) {
@@ -250,11 +259,34 @@ export class TicketDetailService {
         updatedAt: detail.updatedAt,
       }));
 
+      let formattedForm: any = null;
+
+      if (
+        ticket.formResponse &&
+        ticket.formResponse.form &&
+        ticket.formResponse.responses
+      ) {
+        const form = ticket.formResponse.form;
+
+        formattedForm = {
+          id: form.id,
+          name: form.name,
+          description: form.description,
+          fields: form.fields.map((field) => ({
+            label: field.label,
+            fieldKey: field.fieldKey,
+            type: field.type,
+            value: ticket.formResponse.responses[field.fieldKey] ?? null,
+          })),
+        };
+      }
+
       const result = {
         data: {
           user: ticket.user?.companyname?.trim()
             ? ticket.user.companyname
             : `${ticket.user?.name || ''} ${ticket.user?.lastname || ''}`.trim(),
+          formResponse: formattedForm,
           ticketState: ticket.ticketState?.title || '',
           ticketStateOrder: ticket.ticketState?.orderTicket || 1,
           ticketTitle: ticket.ticketTitle?.description || '',

@@ -41,11 +41,13 @@ export class AuthzGuard implements CanActivate {
     const userId = payload.sub;
 
     let user = await this.cacheManagerService.getSession(userId);
+    
     if (!user) {
       // 🔹 Intentamos recuperar el usuario desde la BD si no está en cache
       user = await this.userRepository.findOne({
         where: { id: userId },
-        relations: ['role', 'role.permissions'],
+        relations: ['role', 'role.permissions', 'assignedBranches',
+    'assignedBranches.branch',],
       });
 
       if (!user) {
@@ -55,12 +57,19 @@ export class AuthzGuard implements CanActivate {
       const sessionTTL = Number(process.env.CACHE_SESSION_TTL) || 3600;
       await this.cacheManagerService.setSession(userId, user, sessionTTL);
     }
+   
     const mappedUser: userSession = {
       id: user.id,
       name: user.name,
       lastname: user.lastname,
       email: user.email,
+      companyname: user.companyname,
+      companyId: user.companyId,
       branchId: user.branchId,
+      branches: user.assignedBranches?.map((assigned) => ({
+        id: assigned.branch.id,
+        name: assigned.branch.name,
+      })) || [],
       role: {
         id: user.role.id,
         name: user.role.name,
@@ -87,10 +96,11 @@ export class AuthzGuard implements CanActivate {
     );
 
     const hasPermission = user.role.permissions.some((perm) => {
-      // Convertir :param a expresión regular
-      const basePath = perm.endpoint.split('/:id')[0];
+      const basePath = perm.endpoint.includes("/:id") ? perm.endpoint.split('/:id')[0] : perm.endpoint;
       const isPathMatch = endpoint.startsWith(basePath);
-      return isPathMatch && perm.methods.includes(method);
+      const isMethodMatch = perm.methods.includes(method);
+            
+      return isPathMatch && isMethodMatch;
     });
     
     if (!hasPermission && !user.role.isConfigurator) {

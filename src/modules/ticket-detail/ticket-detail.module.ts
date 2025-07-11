@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TicketDetailService } from 'src/modules/ticket-detail/ticket-detail.service';
 import { TicketDetailController } from 'src/modules/ticket-detail/ticket-detail.controller';
@@ -11,10 +11,16 @@ import { TicketModule } from '../ticket/ticket.module';
 import { EmailModule } from 'src/common/email/email.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Ticket, TicketDetail]),  UsersModule, EmailModule, 
-  TicketStateModule, TicketModule, CacheManagerModule],
+  imports: [
+    TypeOrmModule.forFeature([Ticket, TicketDetail]),
+    UsersModule,
+    EmailModule,
+    TicketStateModule,
+    forwardRef(() => TicketModule), // 👈 rompe el ciclo aquí
+    CacheManagerModule,
+  ],
   controllers: [TicketDetailController],
   providers: [TicketDetailService],
-  exports: [TicketDetailService],
+  exports: [TicketDetailService, TypeOrmModule],
 })
 export class TicketDetailModule {}

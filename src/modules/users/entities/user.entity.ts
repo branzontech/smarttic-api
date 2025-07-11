@@ -24,7 +24,7 @@ export class User {
   @Column({nullable: true})
   companyname: string;
 
-  @Column({ unique: true })
+  @Column()
   email: string;
 
   @Column()
@@ -54,7 +54,7 @@ export class User {
   @Column({ nullable: true })
   isAgentDefault: boolean;
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @ManyToOne(() => Role, (role) => role.users, { nullable: true, onDelete: 'SET NULL' })

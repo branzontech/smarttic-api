@@ -21,9 +21,9 @@ export class TicketState {
   description: string;
 
   @Column({ nullable: true })
-  orderTicket: number;
+  orderTicket: number; 
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @OneToMany(() => Ticket, (ticket) => ticket.ticketState)

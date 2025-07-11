@@ -1,5 +1,6 @@
+import { Form } from 'src/modules/forms/entities/form.entity';
 import { TicketTitle } from 'src/modules/ticket-title/entities/ticket-title.entity';
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn, DeleteDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, ManyToOne } from 'typeorm';
 
 @Entity('TicketCategories')
 export class TicketCategory {
@@ -12,11 +13,11 @@ export class TicketCategory {
   @Column({ unique: true })
   prefix: string;
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @OneToMany(() => TicketTitle, (title) => title.ticketCategory)
-  ticketTitles: TicketTitle[];
+  ticketTitles: TicketTitle[];  
 
   @CreateDateColumn()
   createdAt: Date;

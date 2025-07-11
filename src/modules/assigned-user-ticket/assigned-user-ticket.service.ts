@@ -5,7 +5,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AssignedUserTicket } from './entities/assigned-user-ticket.entity';
 import { CreateAssignedUserTicketDto } from './dto/create-assigned-user-ticket.dto';
 import { UpdateAssignedUserTicketDto } from './dto/update-assigned-user-ticket.dto';
@@ -25,49 +25,53 @@ export class AssignedUserTicketService {
     @InjectRepository(Ticket)
     private readonly ticketRepository: Repository<Ticket>,
     private readonly cacheManager: CacheManagerService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(dto: CreateAssignedUserTicketDto) {
+    const queryRunner = this.dataSource.createQueryRunner();
+  
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+  
     try {
       const { userId, ticketId } = dto;
-      
-      // Validar que el usuario existe
+  
       const user = await this.getUserById(userId);
-      
-      // Validar que el ticket existe
       const ticket = await this.getTicketById(ticketId);
-
-      if (!user) {
-        throw new BadRequestException(`User with id ${userId} not found`);
-      }
-
-      
-      if (!ticket) {
-        throw new BadRequestException(`Ticket with id ${ticketId} not found`);
-      }
-      
-      // Validar que la asignación no exista previamente
+  
+      if (!user) throw new BadRequestException(`User with id ${userId} not found`);
+      if (!ticket) throw new BadRequestException(`Ticket with id ${ticketId} not found`);
+      // Validar si el usuario ya está asignado al ticket con state=true
       await this.ensureAssignmentDoesNotExist(userId, ticketId);
-
-      const assignedUserTicket = this.assignedUserTicketRepository.create(dto);
-      
-      const savedAssignedUserTicket = await this.assignedUserTicketRepository.save(assignedUserTicket);
-
-      // Invalidar caché relacionado
+  
+      // Actualizar a false todos los anteriores assignedUserTicket del mismo ticket
+      await queryRunner.manager.update(AssignedUserTicket, { ticketId, state: true }, { state: false });
+  
+      // Crear nuevo registro con estado = true (o el que venga en el dto)
+      const assignedUserTicket = queryRunner.manager.create(AssignedUserTicket, {
+        ...dto,
+        estado: true,
+      });
+  
+      const savedAssignedUserTicket = await queryRunner.manager.save(assignedUserTicket);
+  
+      await queryRunner.commitTransaction();
+  
+      // Limpiar caché relacionado
       await this.cacheManager.delCache('assignedUserTickets:*');
+  
       return savedAssignedUserTicket;
     } catch (error) {
+      await queryRunner.rollbackTransaction();
+  
       if (error instanceof BadRequestException || error instanceof NotFoundException) {
         throw error;
       }
-    
-      if (error.message) {
-        throw new InternalServerErrorException(
-          error.message
-        );
-      }
-    
+  
       throw new InternalServerErrorException(`Error creating AssignedUserTicket: ${error.message}`);
+    } finally {
+      await queryRunner.release();
     }
   }
 
@@ -80,9 +84,8 @@ export class AssignedUserTicketService {
       const query = this.assignedUserTicketRepository
         .createQueryBuilder('assignedUserTicket')
         .leftJoinAndSelect('assignedUserTicket.user', 'user')
-        .leftJoinAndSelect('assignedUserTicket.ticket', 'ticket')
-        .skip(skip)
-        .take(take);
+        .leftJoinAndSelect('assignedUserTicket.ticket', 'ticket');
+        
 
       if (filter) {
         query.where(
@@ -90,7 +93,8 @@ export class AssignedUserTicketService {
           { filter: `%${filter}%` }
         );
       }
-
+      query.skip(skip)
+      .take(take);
       const [assignedUserTickets, total] = await query.getManyAndCount();
 
       const result = { 
@@ -167,7 +171,7 @@ export class AssignedUserTicketService {
 
   async remove(id: string): Promise<void> {
     try {
-      const assignedUserTicket = await this.getAssignedUserTicketById(id);
+      await this.getAssignedUserTicketById(id);
       await this.assignedUserTicketRepository.softDelete(id);
       
       await this.cacheManager.delCache(`assignedUserTicket:${id}`);
@@ -205,11 +209,11 @@ export class AssignedUserTicketService {
 
   private async ensureAssignmentDoesNotExist(userId: string, ticketId: string) {
     const exist = await this.assignedUserTicketRepository.findOne({ 
-      where: { userId, ticketId },
+      where: { userId, ticketId, state: true },
     });
     if (exist) {
       throw new BadRequestException(
-        `User with id ${userId} is already assigned to ticket with id ${ticketId}`
+        `User is already assigned to ticket`
       );
     }
   }

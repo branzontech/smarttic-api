@@ -7,7 +7,9 @@ import {
   Param, 
   Delete, 
   UseGuards, 
-  Query 
+  Query, 
+  NotFoundException,
+  BadRequestException
 } from '@nestjs/common';
 import { UsersService } from 'src/modules/users/users.service';
 import { CreateUserDto } from 'src/modules/users/dto/create-user.dto';
@@ -20,6 +22,7 @@ import {
 import { ParseIntPipe, HttpException, HttpStatus } from '@nestjs/common';
 import { User} from 'src/modules/users/entities/user.entity';
 import { userSession } from 'src/common/types';
+import { ChangePasswordUserDto } from './dto/change-password-user.dto';
 
 @ApiTags('Users')
 @ApiBearerAuth('access-token') 
@@ -101,7 +104,34 @@ export class UsersController {
     return user;
   }
 
-  
+  @Patch('changePassword')
+  @ApiOperation({ summary: 'Update password user' })
+  @ApiBody({ description: 'User data to change password', type: ChangePasswordUserDto })
+  @ApiResponse({ status: 200, description: 'User change password successfully', type: User })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  async changePassword( @CurrentUser() user: userSession, @Body() changePasswordUserDto: ChangePasswordUserDto) {
+     try {
+      return await this.usersService.changePassword(
+        user.id, 
+        changePasswordUserDto.newPassword, 
+        changePasswordUserDto.confirmNewPassword
+      );
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw new HttpException(error.message, HttpStatus.NOT_FOUND);
+      }
+      
+      if (error instanceof BadRequestException) {
+        throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
+      }
+      
+      throw new HttpException(
+        'An unexpected error occurred while changing the password.',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update user details' })

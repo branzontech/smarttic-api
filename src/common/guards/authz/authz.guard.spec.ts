@@ -1,12 +1,24 @@
-import { JwtService } from '@nestjs/jwt';
 import { AuthzGuard } from './authz.guard';
-import { PrismaService } from 'src/common/database/prisma.service';
+import { JwtService } from '@nestjs/jwt';
+import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
+import { Repository } from 'typeorm';
+import { User } from 'src/modules/users/entities/user.entity';
 
 describe('AuthzGuard', () => {
   let jwtService: JwtService;
-  let prismaService: PrismaService;
+  let cacheManagerService: CacheManagerService;
+  let userRepository: Repository<User>;
+
+  beforeEach(() => {
+    // Cast básicos para evitar errores de tipo
+    jwtService = {} as JwtService;
+    cacheManagerService = {} as CacheManagerService;
+    userRepository = {} as Repository<User>;
+  });
 
   it('should be defined', () => {
-    expect(new AuthzGuard(jwtService, prismaService)).toBeDefined();
+    const guard = new AuthzGuard(userRepository, jwtService, cacheManagerService);
+    expect(guard).toBeDefined();
   });
 });
+

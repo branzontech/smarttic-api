@@ -20,7 +20,7 @@ export class Role {
   @Column({ default: false })
   isConfigurator: boolean;
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @OneToMany(() => User, (user) => user.role)

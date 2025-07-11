@@ -12,13 +12,16 @@ export class SurveyCalification {
   @Column()
   description: string;
 
+  @Column({ type: 'int', default: 0 })
+  score: number;
+
   @Column()
   imageName: string;
 
   @Column({ type: 'text', nullable: true })
   imageBase64: string;
 
-  @Column({ default: true })
+  @Column({ name: 'state', default: true })
   state: boolean;
 
   @OneToMany(() => SurveyResponse, (surveyResponse) => surveyResponse.surveyCalification)

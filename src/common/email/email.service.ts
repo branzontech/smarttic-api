@@ -2,9 +2,13 @@ import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import * as fs from 'fs';
 import * as path from 'path';
+import { SurveyCalificationService } from 'src/modules/survey-calification/survey-calification.service';
 
 @Injectable()
 export class EmailService {
+  constructor(
+    private readonly surveyCalificationService: SurveyCalificationService,
+  ) {}
   // Ruta relativa desde email.service.ts hasta la imagen del logo
   private readonly defaultLogoPath = path.join(
     __dirname,
@@ -12,7 +16,7 @@ export class EmailService {
     'assets',
     'images',
     'logo',
-    'logo_white.png',
+    'logo.png',
   );
 
   private transporter = nodemailer.createTransport({
@@ -30,17 +34,58 @@ export class EmailService {
     subject: string,
     templateName: string,
     context: Record<string, any>,
+    survey: boolean = false,
     options: {
       attachments?: nodemailer.Attachment[];
       baseUrl?: string;
     } = {},
   ): Promise<void> {
     // Configuración de valores por defecto
-    const baseUrl = options.baseUrl || process.env.FRONTEND_URL;
-    const fullContext = { ...context, baseUrl };
-    const html = this.renderTemplate(templateName, fullContext);
 
     try {
+      const baseUrl = options.baseUrl || process.env.FRONTEND_URL;
+      let ratingButtonsHtml = '';
+      
+      if (survey) {
+        const calificationResponse = this.surveyCalificationService.findAll();
+        const calificationData = (await calificationResponse).data;
+        ratingButtonsHtml = calificationData
+          .map((item) => {
+            const surveyData = {
+              ticketId: context.ticketId,
+              userId: context.userId,
+              surveyCalificationId: item.id,
+            };
+            const encodedData = Buffer.from(
+              JSON.stringify(surveyData),
+            ).toString('base64');
+            const url = `${baseUrl}/surveyResponse/${encodedData}`;
+
+            return `
+              <a class="feedback-button" href="${url}">                
+                <span style="vertical-align: middle;">${item.title}</span>
+              </a>
+            `;
+          })
+          .join('');
+
+        // startRatingsHtml = calificationData
+        // .map((item, index) => {
+        //   const surveyData = {
+        //     ticketId: context.ticketId || '',
+        //     userId: context.userId || '',
+        //     surveyCalificationId: item.id
+        //   };
+        //   const encodedData = Buffer.from(JSON.stringify(surveyData)).toString('base64');
+        //   const url = `${baseUrl}/surveyResponse/${encodedData}`;
+        //   return `
+        //   <a href="${url}" class="star-rating" data-rating="${index+1}">★</a>
+        //   `;
+        // })
+        // .join('');
+      }
+      const fullContext = { ...context, baseUrl, ratingButtonsHtml };
+      const html = this.renderTemplate(templateName, fullContext);
       // Adjuntos por defecto (logo)
       const defaultAttachments = [];
 
@@ -58,7 +103,7 @@ export class EmailService {
       const attachments = options.attachments
         ? [...defaultAttachments, ...options.attachments]
         : defaultAttachments;
-      to = 'PalacioDimasLuisEnrique@gmail.com';
+      
       const mailOptions: nodemailer.SendMailOptions = {
         from: process.env.MAIL_FROM || process.env.MAIL_USER,
         to,

@@ -11,12 +11,15 @@ import { CreateMenuDto } from 'src/modules/menu/dto/create-menu.dto';
 import { UpdateMenuDto } from 'src/modules/menu/dto/update-menu.dto';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { CACHE_TTL } from 'src/common/constants';
+import { AssignedMenuRole } from 'src/modules/assigned-menu-role/entities/assigned-menu-role.entity';
 
 @Injectable()
 export class MenuService {
   constructor(
     @InjectRepository(Menu)
     private readonly menuRepository: Repository<Menu>,
+    @InjectRepository(AssignedMenuRole)
+    private readonly assignedMenuRoleRepository: Repository<AssignedMenuRole>,
     private readonly cacheManager: CacheManagerService,
   ) {}
 
@@ -181,17 +184,17 @@ export class MenuService {
         .where('menu.deletedAt IS NULL');
 
       if (filter) {
-        queryBuilder.andWhere(`
+        queryBuilder.andWhere(
+          `
           (menu.nameView ILIKE :filter OR
            menu.description ILIKE :filter OR
            parent.description ILIKE :filter)`,
-          { filter: `%${filter}%` }
-        );        
+          { filter: `%${filter}%` },
+        );
       }
 
       queryBuilder.orderBy('menu.orderItem', 'ASC');
 
-      
       queryBuilder.skip(skip).take(take);
 
       const [menus, total] = await queryBuilder.getManyAndCount();
@@ -233,38 +236,85 @@ export class MenuService {
     }
   }
 
-  async update(id: string, updateMenuDto: UpdateMenuDto): Promise<Menu> {
+  async update(
+    id: string,
+    updateMenuDto: UpdateMenuDto,
+  ): Promise<Menu> {
     try {
-      const existingMenu = await this.menuRepository.preload({
-        id,
-        ...updateMenuDto,
-      });
-      if (!existingMenu) {
-        throw new NotFoundException(`Menu with ID '${id}' not found.`);
-      }
-
-      const updatedMenu = await this.menuRepository.save(existingMenu);
-      await this.cacheManager.delCache(`menu:${id}`);
-      await this.cacheManager.delCache('menus:*');
-      return updatedMenu;
-    } catch (error) {
-      console.error('Error in update:', error);
-      throw new InternalServerErrorException('Could not update the menu.');
-    }
-  }
-
-  async remove(id: string): Promise<void> {
-    try {
+      // Obtener el menú existente
       const existingMenu = await this.menuRepository.findOne({ where: { id } });
       if (!existingMenu) {
         throw new NotFoundException(`Menu with ID '${id}' not found.`);
       }
-      await this.menuRepository.softDelete(id);
+
+      // Si se quiere cambiar el estado
+      if (
+        Object.prototype.hasOwnProperty.call(updateMenuDto, 'state') &&
+        updateMenuDto.state !== existingMenu.state
+      ) {
+        // Verificar si el menú está asignado al rol del usuario
+        const isAssigned = await this.assignedMenuRoleRepository.findOne({
+          where: {
+            menuId: id
+          },
+        });
+
+        if (isAssigned) {
+          throw new ConflictException(
+            'Cannot change the state of a menu that is currently assigned to a role.',
+          );
+        }
+      }
+
+      // Preload y guardar cambios
+      const updatedMenu = await this.menuRepository.preload({
+        id,
+        ...updateMenuDto,
+      });
+
+      if (!updatedMenu) {
+        throw new NotFoundException(`Menu with ID '${id}' not found.`);
+      }
+
+      const result = await this.menuRepository.save(updatedMenu);
       await this.cacheManager.delCache(`menu:${id}`);
       await this.cacheManager.delCache('menus:*');
+
+      return result;
     } catch (error) {
-      console.error('Error in remove:', error);
-      throw new InternalServerErrorException('Could not delete the menu.');
+      console.error('Error in update:', error);
+      if (
+        error instanceof ConflictException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Could not update the menu.');
     }
+  }
+
+  async remove(id: string, force = false): Promise<void> {
+    const existingMenu = await this.menuRepository.findOne({ where: { id } });
+    if (!existingMenu) {
+      throw new NotFoundException(`Menu with ID '${id}' not found.`);
+    }
+
+    const isAssigned = await this.assignedMenuRoleRepository.findOne({
+      where: { menuId: id },
+    });
+
+    if (isAssigned && !force) {
+      throw new ConflictException(
+        'Cannot change the state of a menu that is currently assigned to a role.',
+      );
+    }
+
+    if (isAssigned && force) {
+      await this.assignedMenuRoleRepository.delete({ menuId: id });
+    }
+
+    await this.menuRepository.softDelete(id);
+    await this.cacheManager.delCache(`menu:${id}`);
+    await this.cacheManager.delCache('menus:*');
   }
 }

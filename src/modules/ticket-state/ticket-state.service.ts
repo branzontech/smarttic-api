@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   InternalServerErrorException,
+  HttpException,
 } from '@nestjs/common';
 import { CreateTicketStateDto } from './dto/create-ticket-state.dto';
 import { UpdateTicketStateDto } from './dto/update-ticket-state.dto';
@@ -42,6 +43,9 @@ export class TicketStateService {
       await this.cacheManager.delCache(`ticketStates:*`);
       return savedTicketState;
     } catch (error) {
+      if (error instanceof ConflictException || error instanceof NotFoundException || error instanceof HttpException) {
+        throw error;
+      }
       console.error('Error in create:', error);
       throw new InternalServerErrorException(
         'Could not create the ticket state.',
@@ -74,7 +78,7 @@ export class TicketStateService {
       }
 
       // Aplicar paginación
-      queryBuilder.skip(skip).take(take);
+      queryBuilder.orderBy('ticketState.createdAt', 'DESC').skip(skip).take(take);
 
       const [ticketStates, total] = await queryBuilder.getManyAndCount();
 

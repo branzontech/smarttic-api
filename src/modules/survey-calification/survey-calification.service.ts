@@ -48,7 +48,8 @@ export class SurveyCalificationService {
     const cachedData = await this.cacheManager.getCache<{ data: any[]; total: number }>(cacheKey);
     if (cachedData) return cachedData;
 
-    const queryBuilder = this.surveyCalificationRepository.createQueryBuilder('surveyCalification');
+    const queryBuilder = this.surveyCalificationRepository.createQueryBuilder('surveyCalification')
+    .where('surveyCalification.state = true');
 
     if (filter) {
       queryBuilder.andWhere('surveyCalifications.title ILIKE :filter OR surveyCalifications.description ILIKE :filter', {
@@ -56,7 +57,7 @@ export class SurveyCalificationService {
       });
     }
 
-    queryBuilder.skip(skip).take(take);
+      queryBuilder.orderBy('surveyCalification.createdAt', 'DESC').skip(skip).take(take);
 
     const [surveyCalifications, total] = await queryBuilder.getManyAndCount();
     const result = { data: surveyCalifications, total };

@@ -7,7 +7,8 @@ import {
   Param, 
   Delete, 
   UseGuards, 
-  Query 
+  Query, 
+  DefaultValuePipe
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiQuery, ApiBody, ApiParam, ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AuthzGuard } from 'src/common/guards/authz/authz.guard';
@@ -58,7 +59,23 @@ export class TicketTitleController {
   async findByCategory(@Param('categoryId', ParseUUIDPipe) categoryId: string) {
     return await this.ticketTitleService.findByCategory(categoryId);
   }
-  
+
+  @Get('available/:categoryId?')
+  @ApiOperation({ summary: 'Retrieve ticket titles by category or all unassigned' })
+  @ApiParam({ 
+    name: 'categoryId', 
+    description: 'Optional ticket categoryId to include a specific title',
+    required: false, 
+    type: String 
+  })
+  @ApiResponse({ status: 200, description: 'Ticket titles retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Ticket titles not found' })
+  async findAllAvailable(
+    @Param('categoryId', new DefaultValuePipe(undefined), ParseUUIDPipe) categoryId?: string
+  ) {
+    return await this.ticketTitleService.findAllAvailable(categoryId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Retrieve a specific ticket title by ID' })
   @ApiParam({ name: 'id', description: 'Ticket title ID', type: String })

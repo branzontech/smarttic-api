@@ -13,6 +13,7 @@ import {
   BadRequestException,
   HttpException,
   ParseIntPipe,
+  ConflictException,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -236,7 +237,10 @@ export class MenuController {
   @ApiResponse({ status: 200, description: 'Menu item successfully updated.' })
   @ApiResponse({ status: 400, description: 'Invalid input data.' })
   @ApiResponse({ status: 404, description: 'Menu item not found.' })
-  async update(@Param('id') id: string, @Body() updateMenuDto: UpdateMenuDto) {
+  async update(
+    @Param('id') id: string,
+    @Body() updateMenuDto: UpdateMenuDto,
+  ) {
     try {
       return await this.menuService.update(id, updateMenuDto);
     } catch (error) {
@@ -247,6 +251,10 @@ export class MenuController {
       }
       if (error instanceof BadRequestException) {
         throw new BadRequestException(error.message);
+      }
+
+      if (error instanceof ConflictException) {
+        throw new ConflictException(error.message);
       }
 
       throw new InternalServerErrorException('Error updating menu item');
@@ -273,6 +281,10 @@ export class MenuController {
 
       if (error instanceof NotFoundException) {
         throw new NotFoundException(error.message);
+      }
+
+      if (error instanceof ConflictException) {
+        throw new ConflictException(error.message);
       }
 
       throw new InternalServerErrorException('Error deleting menu item');

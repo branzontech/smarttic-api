@@ -7,10 +7,12 @@ import { CacheManagerModule } from 'src/common/cache-manager/cache-manager.modul
 import { TicketCategoryModule } from 'src/modules/ticket-category/ticket-category.module';
 import { TicketPriorityModule } from 'src/modules/ticket-priority/ticket-priority.module';
 import { UsersModule } from 'src/modules/users/users.module';
+import { FormsModule } from '../forms/forms.module';
 
 
 @Module({
-  imports: [TypeOrmModule.forFeature([TicketTitle]), TicketCategoryModule, TicketPriorityModule, UsersModule, CacheManagerModule],
+  imports: [TypeOrmModule.forFeature([TicketTitle]), TicketCategoryModule, 
+  TicketPriorityModule, UsersModule, CacheManagerModule,  FormsModule],
   controllers: [TicketTitleController],
   providers: [TicketTitleService],
   exports: [TicketTitleService],
