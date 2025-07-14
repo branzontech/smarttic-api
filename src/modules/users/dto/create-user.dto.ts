@@ -174,10 +174,10 @@ export class CreateUserDto {
   @IsBoolean({ message: 'The state must be a boolean.' })
   state?: boolean;
   @ApiProperty({
-    description: 'Límite de tickets que puede registrar el usuario',
+    description: 'Limit of tickets that the agent can manage',
     type: Number,
     example: 10,
   })
-  @IsNumber({}, { message: 'El límite de tickets debe ser un número.' })
+  @IsNumber({}, { message: 'The limit must be a number.' })
   limite_ticket: number;
 }
