@@ -7,11 +7,17 @@ import { Role } from 'src/modules/roles/entities/role.entity';
 import { CacheManagerModule } from 'src/common/cache-manager/cache-manager.module';
 import { AssignedUserBranchModule } from 'src/modules/assigned-user-branch/assigned-user-branch.module';
 import { BranchService } from '../branch/branch.service';
+import { AssignedUserTicket } from '../assigned-user-ticket/entities/assigned-user-ticket.entity';
+import { TicketState } from '../ticket-state/entities/ticket-state.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Role]),  AssignedUserBranchModule, CacheManagerModule], // Registrar las entidades
+  imports: [
+    TypeOrmModule.forFeature([User, Role, AssignedUserTicket, TicketState]),
+    AssignedUserBranchModule,
+    CacheManagerModule,
+  ], // Registrar las entidades
   controllers: [UsersController], // Registrar el controlador
   providers: [UsersService, BranchService], // Registrar el servicio
-  exports: [UsersService, TypeOrmModule], 
+  exports: [UsersService, TypeOrmModule],
 })
 export class UsersModule {}
