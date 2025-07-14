@@ -6,11 +6,13 @@ import { AssignedUserTicket } from './entities/assigned-user-ticket.entity';
 import { CacheManagerModule } from 'src/common/cache-manager/cache-manager.module';
 import { Ticket } from '../ticket/entities/ticket.entity';
 import { User } from '../users/entities/user.entity';
+import { TicketStateModule } from '../ticket-state/ticket-state.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Ticket, User, AssignedUserTicket]),
     CacheManagerModule,
+    TicketStateModule,
   ],
   controllers: [AssignedUserTicketController],
   providers: [AssignedUserTicketService],
