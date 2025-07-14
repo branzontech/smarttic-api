@@ -10,6 +10,6 @@ import { UsersModule } from 'src/modules/users/users.module';
   imports: [TypeOrmModule.forFeature([TicketState]), UsersModule, CacheManagerModule],
   controllers: [TicketStateController],
   providers: [TicketStateService],
-  exports: [TicketStateService]
+  exports: [TicketStateService, TypeOrmModule]
 })
 export class TicketStateModule {}
