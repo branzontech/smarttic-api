@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import {
   BadRequestException,
   Injectable,
@@ -13,6 +14,7 @@ import { User } from '../users/entities/user.entity';
 import { Ticket } from '../ticket/entities/ticket.entity';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { CACHE_TTL } from 'src/common/constants';
+import { TicketStateService } from '../ticket-state/ticket-state.service';
 
 @Injectable()
 export class AssignedUserTicketService {
@@ -23,6 +25,7 @@ export class AssignedUserTicketService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Ticket)
     private readonly ticketRepository: Repository<Ticket>,
+    private readonly ticketStateService: TicketStateService,
     private readonly cacheManager: CacheManagerService,
     private readonly dataSource: DataSource,
   ) {}
@@ -46,7 +49,8 @@ export class AssignedUserTicketService {
       // Validar si el usuario ya está asignado al ticket con state=true
       await this.ensureAssignmentDoesNotExist(userId, ticketId);
 
-      // VALIFACION NUEVA -> LIMITE DE TIcKET DE AGENTE
+      const lastState = await this.ticketStateService.findLastTicketState();
+
       if (user.limite_ticket) {
         const ticketsAsignados = await this.assignedUserTicketRepository
           .createQueryBuilder('assigned')
@@ -54,7 +58,9 @@ export class AssignedUserTicketService {
           .innerJoin('ticket.ticketState', 'state')
           .where('assigned.userId = :userId', { userId })
           .andWhere('assigned.state = true')
-          .andWhere('state.orderTicket != :cerradoOrder', { cerradoOrder: 99 }) // 99 es estado "cerrado"
+          .andWhere('state.id != :cerradoStateId', {
+            cerradoStateId: lastState.id,
+          })
           .getCount();
 
         if (ticketsAsignados >= user.limite_ticket) {
@@ -195,7 +201,9 @@ export class AssignedUserTicketService {
         await this.getAssignedUserTicketById(id);
 
       if (dto.userId) {
-        const agente = await this.getUserById(dto.userId); 
+        const agente = await this.getUserById(dto.userId);
+
+        const lastState = await this.ticketStateService.findLastTicketState();
 
         if (agente?.limite_ticket) {
           const ticketsAsignados = await this.assignedUserTicketRepository
@@ -204,8 +212,8 @@ export class AssignedUserTicketService {
             .innerJoin('ticket.ticketState', 'state')
             .where('assigned.userId = :userId', { userId: agente.id })
             .andWhere('assigned.state = true')
-            .andWhere('state.orderTicket != :cerradoOrder', {
-              cerradoOrder: 99,
+            .andWhere('state.id != :cerradoStateId', {
+              cerradoStateId: lastState.id,
             })
             .getCount();
 
