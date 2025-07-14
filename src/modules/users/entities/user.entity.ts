@@ -12,6 +12,10 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  // new field ticket_limit
+  @Column()
+  limite_ticket: number;
+
   @Column()
   name: string;
 
