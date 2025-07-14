@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import {
   Injectable,
   NotFoundException,
@@ -61,7 +62,8 @@ export class TicketService {
         this.userService.findDefaultAgent(user.branchId),
       ]);
 
-      // VALIDACION DE TICKETS AGENTE
+      const lastState = await this.ticketStateService.findLastTicketState();
+
       // ✅ Si el agente tiene definido un límite de tickets
       if (agentDefault?.limite_ticket) {
         // 🧮 Consultamos cuántos tickets activos tiene actualmente asignados el agente
@@ -71,7 +73,7 @@ export class TicketService {
           .innerJoin('ticket.ticketState', 'state') // Hacemos INNER JOIN con el estado del ticket
           .where('assigned.userId = :userId', { userId: agentDefault.id }) // Filtramos por el ID del agente
           .andWhere('assigned.state = true') // Solo consideramos asignaciones activas
-          .andWhere('state.orderTicket != :cerradoOrder', { cerradoOrder: 99 }) // Excluimos los tickets que estén en estado "cerrado"
+          .andWhere('state.id != :cerradoStateId', { cerradoStateId: lastState.id }) // Excluimos los tickets que estén en estado "cerrado"
           .getCount(); // Obtenemos el número total de tickets asignados que cumplen esas condiciones
 
         // ❌ Si el número de tickets asignados alcanza o supera el límite permitido
