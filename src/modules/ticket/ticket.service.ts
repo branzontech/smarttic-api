@@ -61,6 +61,28 @@ export class TicketService {
         this.userService.findDefaultAgent(user.branchId),
       ]);
 
+      // VALIDACION DE TICKETS AGENTE
+      // ✅ Si el agente tiene definido un límite de tickets
+      if (agentDefault?.limite_ticket) {
+        // 🧮 Consultamos cuántos tickets activos tiene actualmente asignados el agente
+        const ticketsAsignados = await this.assignedUserTicketRepository
+          .createQueryBuilder('assigned') // Creamos el query builder usando el alias 'assigned' para la entidad AssignedUserTicket
+          .innerJoin('assigned.ticket', 'ticket') // Hacemos INNER JOIN con la entidad Ticket (asociada al ticket asignado)
+          .innerJoin('ticket.ticketState', 'state') // Hacemos INNER JOIN con el estado del ticket
+          .where('assigned.userId = :userId', { userId: agentDefault.id }) // Filtramos por el ID del agente
+          .andWhere('assigned.state = true') // Solo consideramos asignaciones activas
+          .andWhere('state.orderTicket != :cerradoOrder', { cerradoOrder: 99 }) // Excluimos los tickets que estén en estado "cerrado"
+          .getCount(); // Obtenemos el número total de tickets asignados que cumplen esas condiciones
+
+        // ❌ Si el número de tickets asignados alcanza o supera el límite permitido
+        if (ticketsAsignados >= agentDefault.limite_ticket) {
+          // Lanzamos una excepción con un mensaje indicando que alcanzó el límite
+          throw new BadRequestException(
+            `El agente ${agentDefault.name} ha alcanzado su límite de tickets activos (${agentDefault.limite_ticket}).`,
+          );
+        }
+      }
+
       if (!ticketState)
         throw new NotFoundException(
           'No se encontró el estado inicial del ticket',
@@ -1172,7 +1194,6 @@ export class TicketService {
     };
   }
 
-  
   async getAgentPerformance(
     user: userSession,
     options: {
@@ -1188,7 +1209,9 @@ export class TicketService {
       const { agentCount = 4, startDate, endDate, branchIds } = options;
 
       const parsedStartDate =
-        typeof startDate === 'string' ? this.parseDateString(startDate) : startDate;
+        typeof startDate === 'string'
+          ? this.parseDateString(startDate)
+          : startDate;
       const parsedEndDate =
         typeof endDate === 'string' ? this.parseDateString(endDate) : endDate;
 
@@ -1205,7 +1228,10 @@ export class TicketService {
         throw new Error('No se pudo determinar el último estado de ticket');
       }
 
-      const categories = this.generateMonthLabels(parsedStartDate, parsedEndDate);
+      const categories = this.generateMonthLabels(
+        parsedStartDate,
+        parsedEndDate,
+      );
 
       // 2. Obtener todos los tickets del rango y su información
       const rawData = await this.ticketRepository
@@ -1222,15 +1248,18 @@ export class TicketService {
           endDate: parsedEndDate,
         })
         .andWhere('state.id = :lastStateId', { lastStateId: lastState.id })
-        .andWhere(branchIds?.length ? 'ticket.branchId IN (:...branchIds)' : '1=1', {
-          branchIds,
-        })
+        .andWhere(
+          branchIds?.length ? 'ticket.branchId IN (:...branchIds)' : '1=1',
+          {
+            branchIds,
+          },
+        )
         .select([
           'user.id as user_id',
           'user.name as user_name',
           'user.lastname as user_lastname',
-          "EXTRACT(MONTH FROM ticket.createdAt) as month_num",
-          "EXTRACT(YEAR FROM ticket.createdAt) as year_num",
+          'EXTRACT(MONTH FROM ticket.createdAt) as month_num',
+          'EXTRACT(YEAR FROM ticket.createdAt) as year_num',
           'COUNT(ticket.id) as count',
         ])
         .groupBy('user.id, user.name, user.lastname, month_num, year_num')
@@ -1245,7 +1274,10 @@ export class TicketService {
       for (const row of rawData) {
         const agentId = row.user_id;
         const agentName = `${row.user_name} ${row.user_lastname}`;
-        const label = this.formatMonthLabel(parseInt(row.month_num), parseInt(row.year_num));
+        const label = this.formatMonthLabel(
+          parseInt(row.month_num),
+          parseInt(row.year_num),
+        );
         const index = categories.indexOf(label);
 
         if (!agentMap[agentId]) {
@@ -1290,13 +1322,23 @@ export class TicketService {
     }
   }
 
-    
   private formatMonthLabel(month: number, year: number): string {
-    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const monthNames = [
+      'Ene',
+      'Feb',
+      'Mar',
+      'Abr',
+      'May',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dic',
+    ];
     return `${monthNames[month - 1]} ${year}`;
   }
-
-
 
   private generateMonthLabels(startDate: Date, endDate: Date): string[] {
     const monthNames = [
