@@ -15,6 +15,8 @@ import { CACHE_TTL } from 'src/common/constants';
 import { hash } from 'bcrypt';
 import { BranchService } from '../branch/branch.service';
 import { AssignedUserBranch } from '../assigned-user-branch/entities/assigned-user-branch.entity';
+import { TicketState } from '../ticket-state/entities/ticket-state.entity';
+import { AssignedUserTicket } from '../assigned-user-ticket/entities/assigned-user-ticket.entity';
 
 @Injectable()
 export class UsersService {
@@ -25,6 +27,10 @@ export class UsersService {
     private readonly roleRepository: Repository<Role>,
     private readonly branchService: BranchService,
     private readonly cacheManager: CacheManagerService,
+    @InjectRepository(TicketState)
+    private readonly ticketStateRepository: Repository<TicketState>,
+    @InjectRepository(AssignedUserTicket)
+    private readonly assignedUserTicketRepository: Repository<AssignedUserTicket>,
   ) {}
 
   async create(user: CreateUserDto): Promise<User> {
@@ -41,12 +47,13 @@ export class UsersService {
         roleId,
         branches = [],
         branchId,
+        limite_ticket,
       } = user;
 
       // Verificar existencia de nombre de usuario y email (incluyendo eliminados)
       const [existUsername, existEmail, roleExists] = await Promise.all([
-        this.userRepository.findOne({ where: { username }}),
-        this.userRepository.findOne({ where: { email }}),
+        this.userRepository.findOne({ where: { username } }),
+        this.userRepository.findOne({ where: { email } }),
         this.roleRepository.findOne({ where: { id: roleId } }),
       ]);
 
@@ -92,6 +99,7 @@ export class UsersService {
       const { branches: _, ...userData } = user;
       const newUser = this.userRepository.create({
         ...userData,
+        limite_ticket: limite_ticket,
         password: hashedPassword,
         branchId: branches.length > 0 ? null : branchId, // Asegurar null si usa branches
       });
@@ -158,7 +166,7 @@ export class UsersService {
       queryBuilder.orderBy('user.createdAt', 'DESC').skip(skip).take(take);
 
       const [users, total] = await queryBuilder.getManyAndCount();
-      
+
       const result = { data: users, total, message: 'User List' };
       await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
       return result;
@@ -183,7 +191,7 @@ export class UsersService {
         name: '',
       },
     });
-  
+
     await this.cacheManager.setCache(cacheKey, users, CACHE_TTL);
     return { data: users };
   }
@@ -199,9 +207,11 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException(`User with id ${id} not found`);
     delete (user as User).password;
-    (user as any).branches =user.assignedBranches.map(branch => branch.branchId);
+    (user as any).branches = user.assignedBranches.map(
+      (branch) => branch.branchId,
+    );
     delete (user as any).assignedBranches;
-    
+
     await this.cacheManager.setCache(cacheKey, user, CACHE_TTL);
     return user;
   }
@@ -247,8 +257,37 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException(`Default Agents not found`);
 
+    // Search id of ticketstates "Abierto"
+    const openState = await this.ticketStateRepository.findOne({
+      where: { title: 'Abierto' },
+    });
+
+    if (!openState) throw new NotFoundException(`Open ticket state not found`);
+
+    const resultWithTickets = await Promise.all(
+      user.map(async (agent) => {
+        const activeTicketsCount =
+          await this.assignedUserTicketRepository.count({
+            where: {
+              user: { id: agent.id },
+              state: true,
+              ticket: {
+                ticketState: { id: openState.id },
+                state: true,
+              },
+            },
+            relations: ['ticket', 'ticket.ticketState'],
+          });
+
+        return {
+          ...agent,
+          activeTickets: activeTicketsCount,
+        };
+      }),
+    );
+
     await this.cacheManager.setCache(cacheKey, user, CACHE_TTL);
-    return { data: user };
+    return { data: resultWithTickets };
   }
 
   async findByEmail(email: string): Promise<User> {
@@ -294,26 +333,26 @@ export class UsersService {
   }
 
   async update(id: string, user: UpdateUserDto): Promise<User> {
-    const queryRunner = this.userRepository.manager.connection.createQueryRunner();
+    const queryRunner =
+      this.userRepository.manager.connection.createQueryRunner();
 
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
     try {
-      const existingUser = await queryRunner.manager.findOne(User, { where: { id } });
+      const existingUser = await queryRunner.manager.findOne(User, {
+        where: { id },
+      });
       if (!existingUser)
         throw new NotFoundException(`User with id ${id} not found`);
 
-      const {
-        password,
-        branchId,
-        branches = [],
-        ...restUserData
-      } = user;
+      const { password, branchId, branches = [], ...restUserData } = user;
 
       // Validación mutuamente excluyente
       if (branchId && branches.length > 0) {
-        throw new BadRequestException('Cannot specify both branchId and branches[]');
+        throw new BadRequestException(
+          'Cannot specify both branchId and branches[]',
+        );
       }
 
       // Validar nuevas branches si se pasan
@@ -329,13 +368,17 @@ export class UsersService {
           (_, index) => !branchesExist[index],
         );
         if (invalidBranches.length > 0) {
-          throw new BadRequestException(`Invalid branch IDs: ${invalidBranches.join(', ')}`);
+          throw new BadRequestException(
+            `Invalid branch IDs: ${invalidBranches.join(', ')}`,
+          );
         }
       }
 
       // Filtrar campos no nulos (como hicimos antes)
       const filteredUser = Object.fromEntries(
-        Object.entries(restUserData).filter(([_, value]) => value !== null && value !== undefined)
+        Object.entries(restUserData).filter(
+          ([_, value]) => value !== null && value !== undefined,
+        ),
       );
 
       if (password) {
@@ -376,8 +419,6 @@ export class UsersService {
       await queryRunner.release();
     }
   }
-
-
 
   async remove(id: string): Promise<void> {
     const existingUser = await this.userRepository.findOne({ where: { id } });
