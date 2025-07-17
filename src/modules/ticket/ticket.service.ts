@@ -23,19 +23,15 @@ import {
 import { UsersService } from "../users/users.service";
 import { AssignedUserTicket } from "../assigned-user-ticket/entities/assigned-user-ticket.entity";
 import { SurveyResponse } from "../survey-response/entities/survey-response.entity";
-import { TicketDetail } from "../ticket-detail/entities/ticket-detail.entity";
 import { FormResponse } from "../form-responses/entities/form-response.entity";
 import { FormResponseFile } from "../form-response-files/entities/form-response-file.entity";
+import { TicketState } from "../ticket-state/entities/ticket-state.entity";
 
 @Injectable()
 export class TicketService {
   constructor(
     @InjectRepository(Ticket)
     private readonly ticketRepository: Repository<Ticket>,
-    @InjectRepository(TicketDetail)
-    private readonly ticketDetailRepository: Repository<TicketDetail>,
-    private readonly cacheManager: CacheManagerService,
-    private readonly ticketStateService: TicketStateService,
     @InjectRepository(AssignedUserTicket)
     private readonly assignedUserTicketRepository: Repository<AssignedUserTicket>,
     @InjectRepository(SurveyResponse)
@@ -45,7 +41,9 @@ export class TicketService {
     @InjectRepository(FormResponseFile)
     private readonly formResponseFilesRepository: Repository<FormResponseFile>,
     private readonly userService: UsersService,
-    private readonly emailService: EmailService
+    private readonly emailService: EmailService,
+    private readonly cacheManager: CacheManagerService,
+    private readonly ticketStateService: TicketStateService,
   ) {}
 
   async create(

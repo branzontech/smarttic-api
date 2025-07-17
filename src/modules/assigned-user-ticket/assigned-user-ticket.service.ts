@@ -91,7 +91,7 @@ export class AssignedUserTicketService {
 
       await queryRunner.commitTransaction();
 
-      // Limpiar caché relacionado
+      
       await this.cacheManager.delCache('assignedUserTickets:*');
 
       return savedAssignedUserTicket;
@@ -294,7 +294,7 @@ export class AssignedUserTicketService {
       where: { userId, ticketId, state: true },
     });
     if (exist) {
-      throw new BadRequestException(`User is already assigned to ticket`);
+      throw new BadRequestException(`El usuario ya está asignado al ticket`);
     }
   }
 }

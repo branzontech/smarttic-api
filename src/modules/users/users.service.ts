@@ -15,8 +15,8 @@ import { CACHE_TTL } from "src/common/constants";
 import { hash } from "bcrypt";
 import { BranchService } from "../branch/branch.service";
 import { AssignedUserBranch } from "../assigned-user-branch/entities/assigned-user-branch.entity";
-import { TicketState } from '../ticket-state/entities/ticket-state.entity';
 import { AssignedUserTicket } from '../assigned-user-ticket/entities/assigned-user-ticket.entity';
+import { TicketStateService } from "../ticket-state/ticket-state.service";
 
 @Injectable()
 export class UsersService {
@@ -25,12 +25,11 @@ export class UsersService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
+    @InjectRepository(AssignedUserTicket)
+    private readonly assignedUserTicketRepository: Repository<AssignedUserTicket>,
     private readonly branchService: BranchService,
     private readonly cacheManager: CacheManagerService,
-    @InjectRepository(TicketState)
-    private readonly ticketStateRepository: Repository<TicketState>,
-    @InjectRepository(AssignedUserTicket)
-    private readonly assignedUserTicketRepository: Repository<AssignedUserTicket>
+    private readonly ticketStateService: TicketStateService
   ) {}
 
   async create(user: CreateUserDto): Promise<User> {
@@ -268,17 +267,15 @@ export class UsersService {
       relations: ["role"],
     });
 
-    if (!user) throw new NotFoundException(`Default Agents not found`);
+    if (!user) throw new NotFoundException(`Agentes no encontrados`);
 
     // await this.cacheManager.setCache(cacheKey, user, CACHE_TTL);
     // return { data: user };
     // Search id of ticketstates "Abierto"
 
-    const openState = await this.ticketStateRepository.findOne({
-      where: { title: "Abierto" },
-    });
+    const lastState = await this.ticketStateService.findLastTicketState();
 
-    if (!openState) throw new NotFoundException(`Open ticket state not found`);
+    if (!lastState) throw new NotFoundException(`Hubo un error al obtener los agentes. Detalle: Estado de ticket`);
 
     const resultWithTickets = await Promise.all(
       user.map(async (agent) => {
@@ -286,12 +283,9 @@ export class UsersService {
           await this.assignedUserTicketRepository.count({
             where: {
               user: { id: agent.id },
-
               state: true,
-
               ticket: {
-                ticketState: { id: openState.id },
-
+                ticketState: { id: Not(lastState.id) },
                 state: true,
               },
             },
@@ -301,7 +295,6 @@ export class UsersService {
 
         return {
           ...agent,
-
           activeTickets: activeTicketsCount,
         };
       })

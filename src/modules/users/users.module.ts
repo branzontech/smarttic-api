@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersService } from 'src/modules/users/users.service';
 import { UsersController } from 'src/modules/users/users.controller';
@@ -8,13 +8,14 @@ import { CacheManagerModule } from 'src/common/cache-manager/cache-manager.modul
 import { AssignedUserBranchModule } from 'src/modules/assigned-user-branch/assigned-user-branch.module';
 import { BranchService } from '../branch/branch.service';
 import { AssignedUserTicket } from '../assigned-user-ticket/entities/assigned-user-ticket.entity';
-import { TicketState } from '../ticket-state/entities/ticket-state.entity';
+import { TicketStateModule } from '../ticket-state/ticket-state.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Role, AssignedUserTicket, TicketState]),
+    TypeOrmModule.forFeature([User, Role, AssignedUserTicket]),
     AssignedUserBranchModule,
     CacheManagerModule,
+    forwardRef(() => TicketStateModule) ,
   ], // Registrar las entidades
   controllers: [UsersController], // Registrar el controlador
   providers: [UsersService, BranchService], // Registrar el servicio

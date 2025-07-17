@@ -13,7 +13,7 @@ export class User {
   id: string;
 
   // new field ticket_limit
-  @Column()
+  @Column({nullable: true})
   limite_ticket: number;
 
   @Column()
