@@ -39,3 +39,12 @@ export type DashboardChartGroupBar = {
   categories: string[];
   series: { name: string; data: number[] }[];
 };
+
+export type columnDataFilter = {
+  id: string; 
+  value: string
+};
+export type columnDataOrder = {
+  id: string; 
+  desc: boolean
+};

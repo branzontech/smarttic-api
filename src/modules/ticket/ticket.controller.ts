@@ -28,7 +28,7 @@ import { TicketService } from './ticket.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { userSession } from 'src/common/types';
+import { columnDataFilter, columnDataOrder, userSession } from 'src/common/types';
 import { PerformanceResponseDto } from './dto/performnce-response.dto';
 import { multerOptions } from 'src/common/helpers/file-upload.helper';
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -82,8 +82,6 @@ export class TicketController {
     @Body('createTicketDto', ParseJsonPipe) createTicketDto: Partial<CreateTicketDto>,
     @CurrentUser() user: userSession,
   ) {
-    // console.log('🎯 JSON del frontend:', createTicketDto);
-    // console.log('📎 Archivos:', files);
     return await this.ticketService.create(createTicketDto, user, files);
   }
 
@@ -116,8 +114,10 @@ export class TicketController {
     @Query('skip', new ParseIntPipe({ optional: true })) skip = 0,
     @Query('take', new ParseIntPipe({ optional: true })) take = 100,
     @Query('filter') filter?: string,
+    @Query('columnFilters') columnFilters?: columnDataFilter[],
+    @Query('orderBy') orderBy?: columnDataOrder[]
   ) {
-    return await this.ticketService.findAll(user, skip, take, filter);
+    return await this.ticketService.findAll(user, skip, take, filter, columnFilters, orderBy);
   }
   @Get('dashboard/cards')
   @ApiOperation({
@@ -163,8 +163,8 @@ export class TicketController {
   })
   async getDashboardCards(
     @CurrentUser() user: userSession, 
-    @Query('startDate') startDate?: Date,
-    @Query('endDate') endDate?: Date
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string
   ) {
     return await this.ticketService.getDashboardCards(user, startDate, endDate);
   }
@@ -193,8 +193,8 @@ export class TicketController {
   })
   async getCaseStatusByMonth(
     @CurrentUser() user: userSession,
-    @Query('startDate') startDate?: Date,
-    @Query('endDate') endDate?: Date
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string
   ) {
     return await this.ticketService.getCaseStatusByMonth(user, startDate, endDate);
   }
@@ -224,8 +224,8 @@ export class TicketController {
   })
   async getAverageResponse(
     @CurrentUser() user: userSession,
-    @Query('startDate') startDate?: Date,
-    @Query('endDate') endDate?: Date
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string
   ) {
     return await this.ticketService.getAverageResponse(user, startDate, endDate);
   }
@@ -253,8 +253,8 @@ export class TicketController {
     description: 'Internal server error while retrieving statistics',
   })
   async getTicketsByCategoryStats(
-    @Query('startDate') startDate?: Date,
-    @Query('endDate') endDate?: Date
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string
   ) {
     return await this.ticketService.getTicketsByCategoryStats(startDate, endDate);
   }
@@ -286,8 +286,8 @@ export class TicketController {
   })
   async getSatisfactionByRange(
     @CurrentUser() user: userSession,
-    @Query('startDate') startDate?: Date,
-    @Query('endDate') endDate?: Date
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string
   ) {
     
     return this.ticketService.getSatisfactionByRange(user, startDate, endDate);
@@ -332,8 +332,8 @@ export class TicketController {
   async getAgentPerformance(
     @CurrentUser() user: userSession,
     @Query('agentCount') agentCount?: number,
-    @Query('startDate') startDate?: Date,
-    @Query('endDate') endDate?: Date,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
     @Query('branchIds') branchIds?: string
   ) {
     const branchIdsArray = branchIds ? branchIds.split(',') : undefined;

@@ -76,7 +76,7 @@ export class TicketTitleService {
           `
         ticketTitles.description ILIKE :filter OR 
         ticketCategory.description ILIKE :filter OR 
-        ticketPriority.title ILIKE :filter OR 
+        ticketPriority.title ILIKE :filter 
       `,
           { filter: `%${filter}%` },
         );
@@ -160,11 +160,11 @@ export class TicketTitleService {
       const cacheKey = `ticketTitle:category-${ticketCategoryId}`;
       let titles = await this.cacheManager.getCache<TicketTitle[]>(cacheKey);
 
-      if (!titles) {
+      // if (!titles) {
         titles = await this.ticketTitleRepository.find({ where: { ticketCategoryId } });
         
         await this.cacheManager.setCache(cacheKey, titles);
-      }
+      // }
 
       return {data:titles};
     } catch (error) {

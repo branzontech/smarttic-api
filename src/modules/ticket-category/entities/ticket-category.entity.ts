@@ -1,4 +1,3 @@
-import { Form } from 'src/modules/forms/entities/form.entity';
 import { TicketTitle } from 'src/modules/ticket-title/entities/ticket-title.entity';
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, ManyToOne } from 'typeorm';
 

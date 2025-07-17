@@ -75,7 +75,7 @@ export class TicketCategoryService {
 
       if (filter) {
         query.andWhere(
-          `category.description ILIKE :filter OR category.prefix ILIKE :filter OR form.name ILIKE :filter`,
+          `category.description ILIKE :filter OR category.prefix ILIKE :filter`,
           { filter: `%${filter}%` },
         );
       }
@@ -117,7 +117,7 @@ export class TicketCategoryService {
       if (!category) {
         category = await this.ticketCategoryRepository.findOne({
           where: { id },
-          relations: ['form', 'ticketTitles'],
+          relations: ['ticketTitles'],
         });
 
         if (!category) {
