@@ -252,11 +252,12 @@ export class TicketController {
     status: 500,
     description: 'Internal server error while retrieving statistics',
   })
-  async getTicketsByCategoryStats(
+  async getTicketsByCategoryStats(    
+    @CurrentUser() user: userSession, 
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string
   ) {
-    return await this.ticketService.getTicketsByCategoryStats(startDate, endDate);
+    return await this.ticketService.getTicketsByCategoryStats(user, startDate, endDate);
   }
 
   @Get('dashboard/satisfactionIndicator')

@@ -1,4 +1,3 @@
-/* eslint-disable prettier/prettier */
 import {
   BadRequestException,
   Injectable,
@@ -15,6 +14,8 @@ import { Ticket } from '../ticket/entities/ticket.entity';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { CACHE_TTL } from 'src/common/constants';
 import { TicketStateService } from '../ticket-state/ticket-state.service';
+import { UsersService } from '../users/users.service';
+import { EmailService } from 'src/common/email/email.service';
 
 @Injectable()
 export class AssignedUserTicketService {
@@ -27,10 +28,12 @@ export class AssignedUserTicketService {
     private readonly ticketRepository: Repository<Ticket>,
     private readonly ticketStateService: TicketStateService,
     private readonly cacheManager: CacheManagerService,
+    private readonly userService: UsersService,
+    private readonly emailService: EmailService,
     private readonly dataSource: DataSource,
   ) {}
 
-  async create(dto: CreateAssignedUserTicketDto) {
+  async create_(dto: CreateAssignedUserTicketDto) {
     const queryRunner = this.dataSource.createQueryRunner();
 
     await queryRunner.connect();
@@ -90,11 +93,46 @@ export class AssignedUserTicketService {
         await queryRunner.manager.save(assignedUserTicket);
 
       await queryRunner.commitTransaction();
-
       
+      const userData = await this.getUserById(userId);
+      const ticketData = await this.getTicketById(ticketId);
+      const emailData = {
+        fullname: `${userData.name} ${userData.lastname}` || 'User',
+        ticketState: ticketData.ticketState.description,
+        prefix: ticketData.ticketTitle.ticketCategory.prefix,
+        ticketId: ticketData.id,
+        ticketNumber: ticketData.ticketNumber,
+        ticketTitle: ticketData.ticketTitle.description,
+        ticketPriority: ticketData.ticketTitle.ticketPriority.title,
+        estimatedTime: `${ticketData.ticketTitle.ticketPriority.hoursResponse} horas`,
+        ticketCreatedAt: ticketData.createdAt,
+      };
+
+      let emailStatus = 'Ticket reasignado exitosamente';
+      try {
+        emailData['fullname'] = userData?.name + ' ' + userData?.lastname;
+        const company = await this.userService.findById(userData.companyId);
+        let to=userData?.email;
+        if (company?.email) {
+            to=`${userData?.email},${company.email}`;
+        }
+        await this.emailService.sendEmail(
+          to,
+          `Reasignacion ${ticket.ticketTitle.ticketCategory.prefix}-${ticket.ticketNumber}`,
+          'email-template-assigned.html',
+          emailData,
+        );
+      } catch (error) {
+        emailStatus =
+          'El ticket se reasignó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.';
+      }
+
       await this.cacheManager.delCache('assignedUserTickets:*');
 
-      return savedAssignedUserTicket;
+      return {
+        data: savedAssignedUserTicket,
+        message: emailStatus,
+      };
     } catch (error) {
       await queryRunner.rollbackTransaction();
 
@@ -112,6 +150,148 @@ export class AssignedUserTicketService {
       await queryRunner.release();
     }
   }
+
+  async create(dto: CreateAssignedUserTicketDto) {
+  const queryRunner = this.dataSource.createQueryRunner();
+  await queryRunner.connect();
+
+  try {
+    await queryRunner.startTransaction();
+
+    const { userId, ticketId } = dto;
+
+    const user = await queryRunner.manager.findOne(User, {
+      where: { id: userId },
+    });
+    const ticket = await queryRunner.manager.findOne(Ticket, {
+      where: { id: ticketId },
+      relations: ['ticketTitle', 'ticketTitle.ticketCategory', 'ticketState'],
+    });
+
+    if (!user)
+      throw new BadRequestException(`User with id ${userId} not found`);
+    if (!ticket)
+      throw new BadRequestException(`Ticket with id ${ticketId} not found`);
+
+    // Validar si ya está asignado el usuario a ese ticket
+    const existingAssignment = await queryRunner.manager.findOne(
+      AssignedUserTicket,
+      {
+        where: { userId, ticketId, state: true },
+      }
+    );
+
+    if (existingAssignment) {
+      throw new BadRequestException(
+        `El usuario ya está asignado al ticket ${ticketId}.`
+      );
+    }
+
+    const lastState = await this.ticketStateService.findLastTicketState();
+
+    // Verificar límite de tickets activos
+    if (user.limite_ticket) {
+      const ticketsAsignados = await queryRunner.manager
+        .createQueryBuilder(AssignedUserTicket, 'assigned')
+        .innerJoin('assigned.ticket', 'ticket')
+        .innerJoin('ticket.ticketState', 'state')
+        .where('assigned.userId = :userId', { userId })
+        .andWhere('assigned.state = true')
+        .andWhere('state.id != :cerradoStateId', {
+          cerradoStateId: lastState.id,
+        })
+        .getCount();
+
+      if (ticketsAsignados >= user.limite_ticket) {
+        throw new BadRequestException(
+          `El agente ${user.name} ha alcanzado su límite de tickets activos (${user.limite_ticket}).`
+        );
+      }
+    }
+
+    // Desactivar anteriores asignaciones del ticket
+    await queryRunner.manager.update(
+      AssignedUserTicket,
+      { ticketId, state: true },
+      { state: false }
+    );
+
+    // Crear nueva asignación
+    const assignedUserTicket = queryRunner.manager.create(
+      AssignedUserTicket,
+      {
+        ...dto,
+        state: true,
+      }
+    );
+
+    const savedAssignedUserTicket = await queryRunner.manager.save(
+      assignedUserTicket
+    );
+
+    await queryRunner.commitTransaction();
+
+    // Email fuera de la transacción
+    const userData = await this.getUserById(userId);
+    const ticketData = await this.getTicketById(ticketId);
+
+    const emailData = {
+      fullname: `${userData.name} ${userData.lastname}` || 'User',
+      ticketState: ticketData.ticketState.description,
+      prefix: ticketData.ticketTitle.ticketCategory.prefix,
+      ticketId: ticketData.id,
+      ticketNumber: ticketData.ticketNumber,
+      ticketTitle: ticketData.ticketTitle.description,
+      ticketPriority: ticketData.ticketTitle.ticketPriority.title,
+      estimatedTime: `${ticketData.ticketTitle.ticketPriority.hoursResponse} horas`,
+      ticketCreatedAt: ticketData.createdAt,
+    };
+
+    let emailStatus = 'Ticket reasignado exitosamente';
+    try {
+      const company = await this.userService.findById(userData.companyId);
+      let to = userData.email;
+      if (company?.email) {
+        to = `${userData.email},${company.email}`;
+      }
+
+      await this.emailService.sendEmail(
+        to,
+        `Reasignación ${emailData.prefix}-${emailData.ticketNumber}`,
+        'email-template-assigned.html',
+        emailData
+      );
+    } catch (error) {
+      emailStatus =
+        'El ticket se reasignó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.';
+    }
+
+    await this.cacheManager.delCache('assignedUserTickets:*');
+
+    return {
+      data: savedAssignedUserTicket,
+      message: emailStatus,
+    };
+  } catch (error) {
+    if (queryRunner.isTransactionActive) {
+      await queryRunner.rollbackTransaction();
+    }
+
+    if (
+      error instanceof BadRequestException ||
+      error instanceof NotFoundException
+    ) {
+      throw error;
+    }
+
+    throw new InternalServerErrorException(
+      `Error creating AssignedUserTicket: ${error.message}`
+    );
+  } finally {
+    await queryRunner.release();
+  }
+}
+
 
   async findAll(skip: number = 0, take: number = 10, filter?: string) {
     try {
@@ -268,12 +448,31 @@ export class AssignedUserTicketService {
     return user;
   }
 
+  // private async getTicketById_(ticketId: string): Promise<Ticket> {
+  //   const ticket = await this.ticketRepository.findOne({
+  //     where: { id: ticketId },
+  //   });
+  //   if (!ticket)
+  //     throw new NotFoundException(`Ticket with id ${ticketId} not found`);
+  //   return ticket;
+  // }
+
   private async getTicketById(ticketId: string): Promise<Ticket> {
     const ticket = await this.ticketRepository.findOne({
       where: { id: ticketId },
+      relations: {
+        ticketState: true,
+        ticketTitle: {
+          ticketCategory: true,
+          ticketPriority: true,
+        },
+      },
     });
-    if (!ticket)
+
+    if (!ticket) {
       throw new NotFoundException(`Ticket with id ${ticketId} not found`);
+    }
+
     return ticket;
   }
 
