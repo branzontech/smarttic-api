@@ -1,31 +1,33 @@
+/* eslint-disable prettier/prettier */
 import {
   Injectable,
   NotFoundException,
   ConflictException,
   InternalServerErrorException,
   BadRequestException,
-} from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, SelectQueryBuilder } from "typeorm";
-import { CacheManagerService } from "src/common/cache-manager/cache-manager.service";
-import { Ticket } from "./entities/ticket.entity";
-import { CreateTicketDto } from "./dto/create-ticket.dto";
-import { UpdateTicketDto } from "./dto/update-ticket.dto";
-import { CACHE_TTL } from "src/common/constants";
-import { TicketStateService } from "../ticket-state/ticket-state.service";
-import { EmailService } from "src/common/email/email.service";
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
+import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
+import { Ticket } from './entities/ticket.entity';
+import { CreateTicketDto } from './dto/create-ticket.dto';
+import { UpdateTicketDto } from './dto/update-ticket.dto';
+import { CACHE_TTL } from 'src/common/constants';
+import { TicketStateService } from '../ticket-state/ticket-state.service';
+import { EmailService } from 'src/common/email/email.service';
 import {
   userSession,
   DashboardChartGroupBar,
   columnDataFilter,
   columnDataOrder,
-} from "src/common/types";
-import { UsersService } from "../users/users.service";
-import { AssignedUserTicket } from "../assigned-user-ticket/entities/assigned-user-ticket.entity";
-import { SurveyResponse } from "../survey-response/entities/survey-response.entity";
-import { FormResponse } from "../form-responses/entities/form-response.entity";
-import { FormResponseFile } from "../form-response-files/entities/form-response-file.entity";
-import { TicketState } from "../ticket-state/entities/ticket-state.entity";
+} from 'src/common/types';
+import { UsersService } from '../users/users.service';
+import { AssignedUserTicket } from '../assigned-user-ticket/entities/assigned-user-ticket.entity';
+import { SurveyResponse } from '../survey-response/entities/survey-response.entity';
+import { FormResponse } from '../form-responses/entities/form-response.entity';
+import { FormResponseFile } from '../form-response-files/entities/form-response-file.entity';
+import { TicketState } from '../ticket-state/entities/ticket-state.entity';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class TicketService {
@@ -49,7 +51,7 @@ export class TicketService {
   async create(
     createTicketDto: Partial<CreateTicketDto>,
     user: userSession,
-    files: Express.Multer.File[]
+    files: Express.Multer.File[],
   ): Promise<{ data: Ticket; message: string }> {
     const queryRunner =
       this.ticketRepository.manager.connection.createQueryRunner();
@@ -57,49 +59,50 @@ export class TicketService {
     await queryRunner.startTransaction();
 
     try {
-      if (!user?.id) throw new BadRequestException("Usuario no autenticado");
+      if (!user?.id) throw new BadRequestException('Usuario no autenticado');
 
-      const [ticketState, agentDefault] = await Promise.all([
-        this.ticketStateService.findByOrder(1),
-        this.userService.findDefaultAgent(user.branchId),
-      ]);
-
+      const ticketState = await this.ticketStateService.findByOrder(1);
       const lastState = await this.ticketStateService.findLastTicketState();
 
+      // Buscar todos los agente por defecto de la sucursal
+      const defaultAgents = await this.userService.findDefaultAgents(
+        user.branchId,
+      );
+      let selectedAgent: User | null = null;
 
-      if (agentDefault?.limite_ticket) {
-        const ticketsAsignados = await this.assignedUserTicketRepository
+      for (const agent of defaultAgents) {
+        if (!agent.limite_ticket) continue;
 
-          .createQueryBuilder("assigned")
-          .innerJoin("assigned.ticket", "ticket")
-          .innerJoin("ticket.ticketState", "state")
-          .where("assigned.userId = :userId", { userId: agentDefault.id })
-          .andWhere("assigned.state = true")
-          .andWhere("state.id != :cerradoStateId", {
+        const assignedCount = await this.assignedUserTicketRepository
+          .createQueryBuilder('assigned')
+          .innerJoin('assigned.ticket', 'ticket')
+          .innerJoin('ticket.ticketState', 'state')
+          .where('assigned.userId = :userId', { userId: agent.id })
+          .andWhere('assigned.state = true')
+          .andWhere('state.id != :cerradoStateId', {
             cerradoStateId: lastState.id,
           })
           .getCount();
 
-        if (ticketsAsignados >= agentDefault.limite_ticket) {
-          throw new BadRequestException(
-            `El agente ${agentDefault.name} ha alcanzado su límite de tickets activos (${agentDefault.limite_ticket}).`
-          );
+        if (assignedCount < agent.limite_ticket) {
+          selectedAgent = agent;
+          break;
         }
       }
 
       if (!ticketState)
         throw new NotFoundException(
-          "No se encontró el estado inicial del ticket"
+          'No se encontró el estado inicial del ticket',
         );
       if (!createTicketDto.ticketTitleId)
-        throw new BadRequestException("El título del ticket es obligatorio");
+        throw new BadRequestException('El título del ticket es obligatorio');
 
       const branchId =
         user.role.isAdmin || user.role.isConfigurator
           ? createTicketDto.branchId
           : user.branchId;
       if (!branchId)
-        throw new BadRequestException("El ticket no tiene sucursal asignada");
+        throw new BadRequestException('El ticket no tiene sucursal asignada');
 
       const {
         formResponse: formResponseData,
@@ -146,7 +149,7 @@ export class TicketService {
         await queryRunner.manager.save(Ticket, savedTicket);
       }
 
-      const assignedUserId = user.role.isAgent ? user.id : agentDefault?.id;
+      const assignedUserId = user.role.isAgent ? user.id : selectedAgent?.id;
       if (assignedUserId) {
         const assigned = this.assignedUserTicketRepository.create({
           userId: assignedUserId,
@@ -159,10 +162,10 @@ export class TicketService {
 
       const resultData = await this.findOne(savedTicket.id);
 
-      let emailStatus = "Ticket creado exitosamente";
+      let emailStatus = 'Ticket creado exitosamente';
       try {
         const emailData = {
-          fullname: `${user.name} ${user.lastname}` || "User",
+          fullname: `${user.name} ${user.lastname}` || 'User',
           ticketState: ticketState.description,
           prefix: resultData.ticketTitle.ticketCategory.prefix,
           ticketId: resultData.id,
@@ -176,35 +179,35 @@ export class TicketService {
         await this.emailService.sendEmail(
           user.email,
           `${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-          "email-template-open.html",
-          emailData
+          'email-template-open.html',
+          emailData,
         );
-        if (agentDefault.email) {
+        if (selectedAgent?.email) {
           const company = await this.userService.findById(user.companyId);
-          emailData["fullname"] =
-            agentDefault.name + " " + agentDefault.lastname;
+          emailData['fullname'] =
+            selectedAgent?.name + ' ' + selectedAgent?.lastname;
           await this.emailService.sendEmail(
-            `${agentDefault.email},${company.email}`,
+            `${selectedAgent?.email},${company.email}`,
             `Asignacion ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            "email-template-assigned.html",
-            emailData
+            'email-template-assigned.html',
+            emailData,
           );
         }
 
-        if (!agentDefault.email && user.companyId) {
+        if (!selectedAgent?.email && user.companyId) {
           const company = await this.userService.findById(user.companyId);
           if (company.email) {
             await this.emailService.sendEmail(
               company.email,
               `Asignacion ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-              "email-template-assigned.html",
-              emailData
+              'email-template-assigned.html',
+              emailData,
             );
           }
         }
       } catch (emailError) {
         emailStatus =
-          "El ticket se creó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.";
+          'El ticket se creó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.';
       }
 
       await this.cacheManager.delCache(`tickets:*`);
@@ -223,8 +226,8 @@ export class TicketService {
       }
       throw new InternalServerErrorException(
         `Se produjo un error al crear el ticket: ${
-          error?.message || "Unexpected error"
-        }`
+          error?.message || 'Unexpected error'
+        }`,
       );
     } finally {
       await queryRunner.release();
@@ -237,18 +240,18 @@ export class TicketService {
     take: number = 10,
     filter?: string,
     columnFilters?: columnDataFilter[],
-    orderBy?: columnDataOrder[]
+    orderBy?: columnDataOrder[],
   ) {
     try {
       const { isAdmin, isAgent, isConfigurator } = user.role;
       const isClient = !isAdmin && !isAgent && !isConfigurator;
       const filtersKey =
-        columnFilters?.map((f) => `${f.id}:${f.value}`).join(",") || "";
-      const orderKey = orderBy?.map((f) => `${f.id}:${f.desc}`).join(",") || "";
+        columnFilters?.map((f) => `${f.id}:${f.value}`).join(',') || '';
+      const orderKey = orderBy?.map((f) => `${f.id}:${f.desc}`).join(',') || '';
       const cacheKey = `tickets:userId:${
         user.id
       }:skip:${skip}:take:${take}:filter:${
-        filter || ""
+        filter || ''
       }:columnFilters:${filtersKey}:columnOrder:${orderKey}`;
       const cachedData = await this.cacheManager.getCache<{
         data: Ticket[];
@@ -258,35 +261,35 @@ export class TicketService {
       if (cachedData) return cachedData;
 
       const queryBuilder = this.ticketRepository
-        .createQueryBuilder("ticket")
-        .leftJoinAndSelect("ticket.formResponse", "formResponse")
-        .leftJoinAndSelect("formResponse.form", "form")
-        .leftJoinAndSelect("ticket.ticketState", "ticketState")
-        .leftJoinAndSelect("ticket.ticketTitle", "ticketTitle")
-        .leftJoinAndSelect("ticket.user", "user")
-        .leftJoinAndSelect("ticket.branch", "branch")
-        .leftJoinAndSelect("user.company", "company")
-        .leftJoinAndSelect("ticketTitle.ticketCategory", "ticketCategory")
-        .leftJoinAndSelect("ticketTitle.ticketPriority", "ticketPriority")
+        .createQueryBuilder('ticket')
+        .leftJoinAndSelect('ticket.formResponse', 'formResponse')
+        .leftJoinAndSelect('formResponse.form', 'form')
+        .leftJoinAndSelect('ticket.ticketState', 'ticketState')
+        .leftJoinAndSelect('ticket.ticketTitle', 'ticketTitle')
+        .leftJoinAndSelect('ticket.user', 'user')
+        .leftJoinAndSelect('ticket.branch', 'branch')
+        .leftJoinAndSelect('user.company', 'company')
+        .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
+        .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
         .leftJoinAndSelect(
-          "ticket.assignedUsers",
-          "assignedUsers",
-          "assignedUsers.state = true"
+          'ticket.assignedUsers',
+          'assignedUsers',
+          'assignedUsers.state = true',
         )
-        .leftJoinAndSelect("assignedUsers.user", "agent");
+        .leftJoinAndSelect('assignedUsers.user', 'agent');
 
       // Filtro por rol
       if (!isConfigurator) {
         if (isClient) {
-          queryBuilder.andWhere("ticket.userId = :userId", { userId: user.id });
+          queryBuilder.andWhere('ticket.userId = :userId', { userId: user.id });
         }
         if (isAgent) {
-          queryBuilder.andWhere("assignedUsers.userId = :agentId", {
+          queryBuilder.andWhere('assignedUsers.userId = :agentId', {
             agentId: user.id,
           });
         }
         if (isAdmin) {
-          queryBuilder.andWhere("user.companyId = :userId", {
+          queryBuilder.andWhere('user.companyId = :userId', {
             userId: user.id,
           });
         }
@@ -299,30 +302,30 @@ export class TicketService {
         // Campos visibles por todos
         conditions.push(
           `CONCAT(ticketCategory.prefix,'-', "ticket"."ticketNumber") ILIKE :filter`,
-          "ticketTitle.description ILIKE :filter",
-          "ticketPriority.title ILIKE :filter",
-          "ticketState.title ILIKE :filter",
-          "ticketState.title ILIKE :filter",
-          "agent.name ILIKE :filter",
-          "agent.lastname ILIKE :filter"
+          'ticketTitle.description ILIKE :filter',
+          'ticketPriority.title ILIKE :filter',
+          'ticketState.title ILIKE :filter',
+          'ticketState.title ILIKE :filter',
+          'agent.name ILIKE :filter',
+          'agent.lastname ILIKE :filter',
         );
 
         if (!isClient) {
           conditions.push(
-            "user.name ILIKE :filter",
-            "user.lastname ILIKE :filter"
+            'user.name ILIKE :filter',
+            'user.lastname ILIKE :filter',
           );
         }
 
         if (isConfigurator) {
-          conditions.push("company.companyname ILIKE :filter");
+          conditions.push('company.companyname ILIKE :filter');
         }
 
         if (isConfigurator || isAdmin) {
-          conditions.push("branch.name ILIKE :filter");
+          conditions.push('branch.name ILIKE :filter');
         }
 
-        queryBuilder.andWhere(`(${conditions.join(" OR ")})`, {
+        queryBuilder.andWhere(`(${conditions.join(' OR ')})`, {
           filter: `%${filter}%`,
         });
       }
@@ -331,31 +334,31 @@ export class TicketService {
         for (const { id, value } of columnFilters) {
           if (!value) continue;
 
-          if (id === "user") {
+          if (id === 'user') {
             queryBuilder.andWhere(
               `(user.name ILIKE :userValue OR user.lastname ILIKE :userValue OR user.companyname ILIKE :userValue)`,
-              { userValue: `%${value}%` }
+              { userValue: `%${value}%` },
             );
             continue;
           }
-          if (id === "agent") {
+          if (id === 'agent') {
             queryBuilder.andWhere(
               `(agent.name ILIKE :agentValue OR agent.lastname ILIKE :agentValue)`,
-              { agentValue: `%${value}%` }
+              { agentValue: `%${value}%` },
             );
             continue;
           }
 
-          if (id === "ticketNomenclature") {
+          if (id === 'ticketNomenclature') {
             queryBuilder.andWhere(
               `(CONCAT(ticketCategory.prefix,'-', "ticket"."ticketNumber") ILIKE :ticketNomenclatureValue)`,
-              { ticketNomenclatureValue: `%${value}%` }
+              { ticketNomenclatureValue: `%${value}%` },
             );
             continue;
           }
 
           // Convertir a alias y campo
-          const [alias, field] = id.split(".");
+          const [alias, field] = id.split('.');
           if (!alias || !field) continue;
 
           const paramName = `${alias}_${field}`;
@@ -371,14 +374,14 @@ export class TicketService {
         for (const { id, desc } of orderBy) {
           if (!id) continue;
 
-          const parts = id.split(".");
+          const parts = id.split('.');
           if (parts.length !== 2) continue; // Asegura que sea del tipo alias.campo
 
           const [alias, field] = parts;
-          queryBuilder.addOrderBy(`${alias}.${field}`, desc ? "DESC" : "ASC");
+          queryBuilder.addOrderBy(`${alias}.${field}`, desc ? 'DESC' : 'ASC');
         }
       } else {
-        queryBuilder.orderBy("ticket.createdAt", "DESC");
+        queryBuilder.orderBy('ticket.createdAt', 'DESC');
       }
 
       queryBuilder.skip(skip).take(take);
@@ -390,9 +393,9 @@ export class TicketService {
 
       return result;
     } catch (error) {
-      console.error("Error in findAll:", error);
+      console.error('Error in findAll:', error);
       throw new InternalServerErrorException(
-        "Failed to fetch the list of tickets."
+        'Failed to fetch the list of tickets.',
       );
     }
   }
@@ -404,21 +407,21 @@ export class TicketService {
 
       if (!ticket) {
         const queryBuilder = this.ticketRepository
-          .createQueryBuilder("ticket")
-          .leftJoinAndSelect("ticket.formResponse", "formResponse")
-          .leftJoinAndSelect("formResponse.form", "form")
-          .leftJoinAndSelect("ticket.ticketState", "ticketState")
-          .leftJoinAndSelect("ticket.ticketTitle", "ticketTitle")
-          .leftJoinAndSelect("ticket.user", "user")
-          .leftJoinAndSelect("ticketTitle.ticketCategory", "ticketCategory")
-          .leftJoinAndSelect("ticketTitle.ticketPriority", "ticketPriority")
+          .createQueryBuilder('ticket')
+          .leftJoinAndSelect('ticket.formResponse', 'formResponse')
+          .leftJoinAndSelect('formResponse.form', 'form')
+          .leftJoinAndSelect('ticket.ticketState', 'ticketState')
+          .leftJoinAndSelect('ticket.ticketTitle', 'ticketTitle')
+          .leftJoinAndSelect('ticket.user', 'user')
+          .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
+          .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
           .leftJoinAndSelect(
-            "ticket.assignedUsers",
-            "assignedUsers",
-            "assignedUsers.state = true"
+            'ticket.assignedUsers',
+            'assignedUsers',
+            'assignedUsers.state = true',
           )
-          .leftJoinAndSelect("assignedUsers.user", "agent")
-          .where("ticket.id = :id", { id });
+          .leftJoinAndSelect('assignedUsers.user', 'agent')
+          .where('ticket.id = :id', { id });
 
         ticket = await queryBuilder.getOne();
 
@@ -431,13 +434,13 @@ export class TicketService {
 
       return ticket;
     } catch (error) {
-      console.error("Error en findOne:", error);
-      throw new InternalServerErrorException("No se pudo obtener el ticket.");
+      console.error('Error en findOne:', error);
+      throw new InternalServerErrorException('No se pudo obtener el ticket.');
     }
   }
 
   async updateStatusToInProcess(
-    id: string
+    id: string,
   ): Promise<{ data: Ticket; message: string }> {
     try {
       // Find the state with order 3
@@ -464,13 +467,13 @@ export class TicketService {
       }
 
       const resultData = await this.findOne(updatedTicket.id);
-      let emailStatus = "Ticket pass to In Process successfully";
+      let emailStatus = 'Ticket pass to In Process successfully';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
 
       try {
         const emailData = {
-          fullname: `${user.name} ${user.lastname}` || "User",
+          fullname: `${user.name} ${user.lastname}` || 'User',
           ticketState: ticketState.title,
           prefix: prefix,
           ticketNumber: resultData.ticketNumber,
@@ -483,26 +486,26 @@ export class TicketService {
         await this.emailService.sendEmail(
           user.email,
           `Devuelta ${prefix}-${updatedTicket.ticketNumber}`,
-          "email-template.html",
-          emailData
+          'email-template.html',
+          emailData,
         );
         if (ticket.user) {
           const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId
+            ticket.assignedUsers[0].userId,
           );
           const company = await this.userService.findById(user.companyId);
-          emailData["fullname"] = agent.name + " " + agent.lastname;
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
           await this.emailService.sendEmail(
             `${agent.email},${company.email}`,
             `Modificacion tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            "email-template-assigned-modify.html",
-            emailData
+            'email-template-assigned-modify.html',
+            emailData,
           );
         }
       } catch (emailError) {
         console.log(emailError);
         emailStatus =
-          "Ticket was pass to In Process successfully, but the email notification could not be sent. Please contact Branzon Tech support";
+          'Ticket was pass to In Process successfully, but the email notification could not be sent. Please contact Branzon Tech support';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -511,19 +514,19 @@ export class TicketService {
         message: emailStatus,
       };
     } catch (error) {
-      console.error("Error in updateStatusToAssisted:", error);
+      console.error('Error in updateStatusToAssisted:', error);
       throw new InternalServerErrorException(
-        "Failed to update the ticket status."
+        'Failed to update the ticket status.',
       );
     }
   }
 
   async updateStatusToAssisted(
-    id: string
+    id: string,
   ): Promise<{ data: Ticket; message: string }> {
     try {
       // Find the state with order 3
-      console.log("entro");
+      console.log('entro');
       const ticketState = await this.ticketStateService.findByOrder(3);
       if (!ticketState) {
         throw new NotFoundException(`State with order '3' not found.`);
@@ -547,13 +550,13 @@ export class TicketService {
       }
 
       const resultData = await this.findOne(updatedTicket.id);
-      let emailStatus = "Ticket pass to Assisted successfully";
+      let emailStatus = 'Ticket pass to Assisted successfully';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
 
       try {
         const emailData = {
-          fullname: `${user.name} ${user.lastname}` || "User",
+          fullname: `${user.name} ${user.lastname}` || 'User',
           ticketState: ticketState.title,
           prefix: prefix,
           ticketNumber: resultData.ticketNumber,
@@ -566,26 +569,26 @@ export class TicketService {
         await this.emailService.sendEmail(
           user.email,
           `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
-          "email-template.html",
-          emailData
+          'email-template.html',
+          emailData,
         );
         if (ticket.user) {
           const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId
+            ticket.assignedUsers[0].userId,
           );
           const company = await this.userService.findById(user.companyId);
-          emailData["fullname"] = agent.name + " " + agent.lastname;
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
           await this.emailService.sendEmail(
             `${agent.email},${company.email}`,
             `Modificacion tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            "email-template-assigned-modify.html",
-            emailData
+            'email-template-assigned-modify.html',
+            emailData,
           );
         }
       } catch (emailError) {
         console.log(emailError);
         emailStatus =
-          "Ticket was pass to Assisted successfully, but the email notification could not be sent. Please contact Branzon Tech support";
+          'Ticket was pass to Assisted successfully, but the email notification could not be sent. Please contact Branzon Tech support';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -594,15 +597,15 @@ export class TicketService {
         message: emailStatus,
       };
     } catch (error) {
-      console.error("Error in updateStatusToAssisted:", error);
+      console.error('Error in updateStatusToAssisted:', error);
       throw new InternalServerErrorException(
-        "Failed to update the ticket status."
+        'Failed to update the ticket status.',
       );
     }
   }
 
   async updateStatusToCloseted(
-    id: string
+    id: string,
   ): Promise<{ data: Ticket; message: string }> {
     try {
       const ticketLastState =
@@ -628,13 +631,13 @@ export class TicketService {
       }
       const resultData = await this.findOne(updatedTicket.id);
 
-      let emailStatus = "Ticket Closeted successfully";
+      let emailStatus = 'Ticket Closeted successfully';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
 
       try {
         const emailData = {
-          fullname: `${user.name} ${user.lastname}` || "User",
+          fullname: `${user.name} ${user.lastname}` || 'User',
           ticketState: resultData.ticketState.description,
           prefix: prefix,
           ticketId: resultData.id,
@@ -648,27 +651,27 @@ export class TicketService {
         await this.emailService.sendEmail(
           user.email,
           `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
-          "email-template-closet.html",
+          'email-template-closet.html',
           emailData,
-          true
+          true,
         );
         if (ticket.user) {
           const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId
+            ticket.assignedUsers[0].userId,
           );
           const company = await this.userService.findById(user.companyId);
-          emailData["fullname"] = agent.name + " " + agent.lastname;
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
           await this.emailService.sendEmail(
             `${agent.email},${company.email}`,
             `Cierre tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            "email-template-assigned-closet.html",
-            emailData
+            'email-template-assigned-closet.html',
+            emailData,
           );
         }
       } catch (emailError) {
         console.log(emailError);
         emailStatus =
-          "Ticket was pass to Closeted successfully, but the email notification could not be sent. Please contact Branzon Tech support";
+          'Ticket was pass to Closeted successfully, but the email notification could not be sent. Please contact Branzon Tech support';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -678,9 +681,9 @@ export class TicketService {
         message: emailStatus,
       };
     } catch (error) {
-      console.error("Error in updateStatusToCloseted:", error);
+      console.error('Error in updateStatusToCloseted:', error);
       throw new InternalServerErrorException(
-        "Failed to update the ticket status."
+        'Failed to update the ticket status.',
       );
     }
   }
@@ -705,9 +708,9 @@ export class TicketService {
 
       return updatedTicket;
     } catch (error) {
-      console.error("Error en update:", error);
+      console.error('Error en update:', error);
       throw new InternalServerErrorException(
-        "No se pudo actualizar el ticket."
+        'No se pudo actualizar el ticket.',
       );
     }
   }
@@ -724,21 +727,21 @@ export class TicketService {
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
     } catch (error) {
-      console.error("Error en remove:", error);
-      throw new InternalServerErrorException("No se pudo eliminar el ticket.");
+      console.error('Error en remove:', error);
+      throw new InternalServerErrorException('No se pudo eliminar el ticket.');
     }
   }
 
   async getDashboardCards(
     user: userSession,
     startDate: string,
-    endDate: string
+    endDate: string,
   ): Promise<{ data: any[] }> {
     try {
       endDate = this.formatedEndDate(endDate);
       const cacheKey = `dashboard-cards:user-${user.id}:startDate-${startDate}:endDate-${endDate}`;
       const cachedData = await this.cacheManager.getCache<{ data: any[] }>(
-        cacheKey
+        cacheKey,
       );
       const lastMonth = new Date();
       lastMonth.setMonth(lastMonth.getMonth() - 1);
@@ -759,37 +762,37 @@ export class TicketService {
 
       const result = [
         {
-          iconColor: "gray",
+          iconColor: 'gray',
           data: averageResponseTime,
-          title: "Tiempo Promedio de Respuesta",
-          icon: "heroicons-outline:clock",
+          title: 'Tiempo Promedio de Respuesta',
+          icon: 'heroicons-outline:clock',
         },
         {
-          iconColor: "blue",
+          iconColor: 'blue',
           data: casesCreated,
-          title: "Casos Creados",
-          icon: "material-outline:note_add",
+          title: 'Casos Creados',
+          icon: 'material-outline:note_add',
         },
         {
-          iconColor: "success",
+          iconColor: 'success',
           data: casesCompleted,
-          title: "Casos Completados",
-          icon: "material-outline:speaker_notes",
+          title: 'Casos Completados',
+          icon: 'material-outline:speaker_notes',
         },
         {
-          iconColor: "yellow",
-          title: "Satisfacción del Cliente",
+          iconColor: 'yellow',
+          title: 'Satisfacción del Cliente',
           data: customerSatisfaction,
-          icon: "heroicons-outline:users",
+          icon: 'heroicons-outline:users',
         },
       ];
 
       await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
       return { data: result };
     } catch (error) {
-      console.error("Error in getDashboardCards:", error);
+      console.error('Error in getDashboardCards:', error);
       throw new InternalServerErrorException(
-        "Failed to fetch dashboard statistics."
+        'Failed to fetch dashboard statistics.',
       );
     }
   }
@@ -797,11 +800,11 @@ export class TicketService {
   private async countCasesCreated(
     user: userSession,
     startDate: string,
-    endDate: string
+    endDate: string,
   ): Promise<number> {
     const query = this.ticketRepository
-      .createQueryBuilder("ticket")
-      .where("ticket.createdAt BETWEEN :startDate AND :endDate", {
+      .createQueryBuilder('ticket')
+      .where('ticket.createdAt BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       });
@@ -814,15 +817,15 @@ export class TicketService {
   private async countCasesCompleted(
     user: userSession,
     startDate: string,
-    endDate: string
+    endDate: string,
   ): Promise<number> {
     const lastState = await this.ticketStateService.findLastTicketState();
     if (!lastState) return 0;
 
     const query = this.ticketRepository
-      .createQueryBuilder("ticket")
-      .where("ticket.ticketStateId = :stateId", { stateId: lastState.id })
-      .andWhere("ticket.createdAt BETWEEN :startDate AND :endDate", {
+      .createQueryBuilder('ticket')
+      .where('ticket.ticketStateId = :stateId', { stateId: lastState.id })
+      .andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       });
@@ -835,18 +838,18 @@ export class TicketService {
   private async calculateCustomerSatisfaction(
     user: userSession,
     startDate: string,
-    endDate: string
+    endDate: string,
   ): Promise<string> {
     const lastState = await this.ticketStateService.findLastTicketState();
-    if (!lastState) return "0/5";
+    if (!lastState) return '0/5';
 
     const query = this.surveyResponseRepository
-      .createQueryBuilder("response")
-      .select("AVG(calification.score)", "avgScore")
-      .innerJoin("response.ticket", "ticket")
-      .innerJoin("response.surveyCalification", "calification")
-      .where("ticket.ticketStateId = :stateId", { stateId: lastState.id })
-      .andWhere("ticket.createdAt BETWEEN :startDate AND :endDate", {
+      .createQueryBuilder('response')
+      .select('AVG(calification.score)', 'avgScore')
+      .innerJoin('response.ticket', 'ticket')
+      .innerJoin('response.surveyCalification', 'calification')
+      .where('ticket.ticketStateId = :stateId', { stateId: lastState.id })
+      .andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       });
@@ -864,22 +867,22 @@ export class TicketService {
   private async calculateAverageResponseTime(
     user: userSession,
     startDate: string,
-    endDate: string
+    endDate: string,
   ): Promise<string> {
     const lastState = await this.ticketStateService.findLastTicketState();
 
     const query = this.ticketRepository
-      .createQueryBuilder("ticket")
+      .createQueryBuilder('ticket')
       .select(
         'ROUND(AVG(EXTRACT(EPOCH FROM (ticket."updatedAt" - ticket."createdAt")) / 3600)::numeric, 2)',
-        "avgHours"
+        'avgHours',
       )
       .where('ticket."createdAt" BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       })
       .andWhere('ticket."ticketStateId" = :stateId', { stateId: lastState.id })
-      .andWhere("ticket.state = true")
+      .andWhere('ticket.state = true')
       .andWhere('ticket."deletedAt" IS NULL')
       .andWhere('ticket."updatedAt" IS NOT NULL');
 
@@ -893,16 +896,16 @@ export class TicketService {
 
   private applyUserFilters(
     query: SelectQueryBuilder<any>,
-    user: userSession
+    user: userSession,
   ): void {
     const { isAdmin, isConfigurator, isAgent } = user.role;
 
     if (!isAdmin && !isConfigurator && !isAgent) {
-      query.andWhere("ticket.userId = :userId", { userId: user.id });
+      query.andWhere('ticket.userId = :userId', { userId: user.id });
     }
 
     if (isAgent) {
-      query.innerJoin("ticket.assignedUsers", "au", "au.userId = :userId", {
+      query.innerJoin('ticket.assignedUsers', 'au', 'au.userId = :userId', {
         userId: user.id,
       });
     }
@@ -910,7 +913,7 @@ export class TicketService {
   async getTicketsByCategoryStats(startDate: string, endDate: string) {
     try {
       endDate = this.formatedEndDate(endDate);
-      const cacheKey = "ticketsByCategoryStats";
+      const cacheKey = 'ticketsByCategoryStats';
       const cached = await this.cacheManager.getCache<{
         title: string;
         description: string;
@@ -922,10 +925,10 @@ export class TicketService {
 
       // Obtener todos los tickets con sus categorías
       const ticketsWithCategories = await this.ticketRepository
-        .createQueryBuilder("ticket")
-        .leftJoinAndSelect("ticket.ticketTitle", "ticketTitle")
-        .leftJoinAndSelect("ticketTitle.ticketCategory", "ticketCategory")
-        .where("ticket.createdAt BETWEEN :startDate AND :endDate", {
+        .createQueryBuilder('ticket')
+        .leftJoinAndSelect('ticket.ticketTitle', 'ticketTitle')
+        .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
+        .where('ticket.createdAt BETWEEN :startDate AND :endDate', {
           startDate,
           endDate,
         })
@@ -936,8 +939,8 @@ export class TicketService {
       // Si no hay tickets, devolver estructura vacía
       if (total === 0) {
         return {
-          title: "Tickets por Categoría",
-          description: "Total: 0 casos",
+          title: 'Tickets por Categoría',
+          description: 'Total: 0 casos',
           categories: [],
           values: [],
         };
@@ -948,14 +951,14 @@ export class TicketService {
 
       ticketsWithCategories.forEach((ticket) => {
         const categoryName =
-          ticket.ticketTitle?.ticketCategory?.description || "Sin categoría";
+          ticket.ticketTitle?.ticketCategory?.description || 'Sin categoría';
         const currentCount = categoryMap.get(categoryName) || 0;
         categoryMap.set(categoryName, currentCount + 1);
       });
 
       // Ordenar categorías por cantidad (de mayor a menor)
       const sortedCategories = Array.from(categoryMap.entries()).sort(
-        (a, b) => b[1] - a[1]
+        (a, b) => b[1] - a[1],
       );
 
       // Extraer arrays separados
@@ -964,7 +967,7 @@ export class TicketService {
 
       const result = {
         data: {
-          title: "Tickets por Categoría",
+          title: 'Tickets por Categoría',
           description: `Total: ${total} casos`,
           categories,
           values,
@@ -974,9 +977,9 @@ export class TicketService {
       await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
       return result;
     } catch (error) {
-      console.error("Error en getTicketsByCategoryStats:", error);
+      console.error('Error en getTicketsByCategoryStats:', error);
       throw new InternalServerErrorException(
-        "No se pudo obtener las estadísticas de tickets por categoría."
+        'No se pudo obtener las estadísticas de tickets por categoría.',
       );
     }
   }
@@ -984,7 +987,7 @@ export class TicketService {
   async getAverageResponse(
     user: userSession,
     startDate: string,
-    endDate: string
+    endDate: string,
   ): Promise<{
     title: string;
     description: string;
@@ -993,9 +996,9 @@ export class TicketService {
   }> {
     endDate = this.formatedEndDate(endDate);
     const query = this.ticketRepository
-      .createQueryBuilder("t")
-      .select('t."ticketNumber"', "ticketNumber")
-      .addSelect('tc."prefix"', "prefix")
+      .createQueryBuilder('t')
+      .select('t."ticketNumber"', 'ticketNumber')
+      .addSelect('tc."prefix"', 'prefix')
       .addSelect(
         `
         ROUND(EXTRACT(EPOCH FROM (
@@ -1011,10 +1014,10 @@ export class TicketService {
           ) - t."createdAt"
         )) / 60, 2)
       `,
-        "agent_response_time_minutes"
+        'agent_response_time_minutes',
       )
-      .leftJoin("t.ticketTitle", "tt")
-      .leftJoin("tt.ticketCategory", "tc")
+      .leftJoin('t.ticketTitle', 'tt')
+      .leftJoin('tt.ticketCategory', 'tc')
       .where('t."createdAt" BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
@@ -1031,9 +1034,9 @@ export class TicketService {
           ORDER BY td."createdAt" ASC
           LIMIT 1
         ) IS NOT NULL
-      `
+      `,
       )
-      .orderBy('t."createdAt"', "DESC");
+      .orderBy('t."createdAt"', 'DESC');
 
     this.applyUserFilters(query, user);
     const raw = await query.getRawMany();
@@ -1042,8 +1045,8 @@ export class TicketService {
     const chartData = raw.map((r) => parseFloat(r.agent_response_time_minutes));
 
     return {
-      title: "Tiempo Promedio de Respuesta por Ticket",
-      description: "Minutos hasta la primera respuesta del agente",
+      title: 'Tiempo Promedio de Respuesta por Ticket',
+      description: 'Minutos hasta la primera respuesta del agente',
       chartData,
       chartLabels,
     };
@@ -1052,7 +1055,7 @@ export class TicketService {
   async getSatisfactionByRange(
     user: userSession,
     startDate: string,
-    endDate: string
+    endDate: string,
   ): Promise<{
     data: {
       title: string;
@@ -1076,30 +1079,30 @@ export class TicketService {
       if (cached) return cached;
 
       const rawData = await this.surveyResponseRepository
-        .createQueryBuilder("response")
+        .createQueryBuilder('response')
         .select([
           "DATE_TRUNC('month', response.createdAt) as month",
-          "ROUND(AVG(calification.score), 0) as average_score",
+          'ROUND(AVG(calification.score), 0) as average_score',
         ])
-        .innerJoin("response.surveyCalification", "calification")
-        .innerJoin("response.ticket", "ticket")
-        .where("response.createdAt BETWEEN :startDate AND :endDate", {
+        .innerJoin('response.surveyCalification', 'calification')
+        .innerJoin('response.ticket', 'ticket')
+        .where('response.createdAt BETWEEN :startDate AND :endDate', {
           startDate,
           endDate,
         })
         .groupBy("DATE_TRUNC('month', response.createdAt)")
-        .orderBy("month", "ASC")
+        .orderBy('month', 'ASC')
         .getRawMany();
 
       const { chartData, chartLabels } = this.processSatisfactionByRange(
         rawData,
         startDate,
-        endDate
+        endDate,
       );
 
       const result = {
         data: {
-          title: "Indicador de Satisfacción",
+          title: 'Indicador de Satisfacción',
           description: `Evaluación desde ${startDate} hasta ${endDate}`,
           chartData,
           chartLabels,
@@ -1109,9 +1112,9 @@ export class TicketService {
       await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
       return result;
     } catch (error) {
-      console.error("Error en getSatisfactionByRange:", error);
+      console.error('Error en getSatisfactionByRange:', error);
       throw new InternalServerErrorException(
-        "No se pudo obtener el indicador de satisfacción."
+        'No se pudo obtener el indicador de satisfacción.',
       );
     }
   }
@@ -1119,24 +1122,24 @@ export class TicketService {
   private processSatisfactionByRange(
     rawData: any[],
     startDate: string,
-    endDate: string
+    endDate: string,
   ): {
     chartData: number[];
     chartLabels: string[];
   } {
     const monthNames = [
-      "Ene",
-      "Feb",
-      "Mar",
-      "Abr",
-      "May",
-      "Jun",
-      "Jul",
-      "Ago",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dic",
+      'Ene',
+      'Feb',
+      'Mar',
+      'Abr',
+      'May',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dic',
     ];
     const chartLabels: string[] = [];
     const chartData: number[] = [];
@@ -1147,12 +1150,12 @@ export class TicketService {
     let current = new Date(
       startDateFormated.getFullYear(),
       startDateFormated.getMonth(),
-      1
+      1,
     );
     const end = new Date(
       endDateFormated.getFullYear(),
       endDateFormated.getMonth(),
-      1
+      1,
     );
 
     while (current <= end) {
@@ -1178,7 +1181,7 @@ export class TicketService {
   async getCaseStatusByMonth(
     user: userSession,
     startDate: string,
-    endDate: string
+    endDate: string,
   ): Promise<DashboardChartGroupBar> {
     endDate = this.formatedEndDate(endDate);
 
@@ -1197,23 +1200,23 @@ export class TicketService {
 
     // Consulta agrupada por mes, año y estado
     const query = this.ticketRepository
-      .createQueryBuilder("ticket")
+      .createQueryBuilder('ticket')
       .select([
         `EXTRACT(MONTH FROM ticket.createdAt) as month_num`,
         `EXTRACT(YEAR FROM ticket.createdAt) as year_num`,
         `ticket.ticketStateId as stateId`,
         `COUNT(*) as count`,
       ])
-      .where("ticket.createdAt BETWEEN :startDate AND :endDate", {
+      .where('ticket.createdAt BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       })
-      .andWhere("ticket.ticketStateId IN (:...stateIds)", {
+      .andWhere('ticket.ticketStateId IN (:...stateIds)', {
         stateIds: Object.values(stateIds),
       })
-      .groupBy("month_num, year_num, ticket.ticketStateId")
-      .orderBy("year_num", "ASC")
-      .addOrderBy("month_num", "ASC");
+      .groupBy('month_num, year_num, ticket.ticketStateId')
+      .orderBy('year_num', 'ASC')
+      .addOrderBy('month_num', 'ASC');
 
     this.applyUserFilters(query, user);
 
@@ -1228,7 +1231,7 @@ export class TicketService {
     // Llena los datos en su índice correspondiente
     for (const row of raw) {
       const stateName = Object.keys(stateIds).find(
-        (key) => stateIds[key] === row.stateid
+        (key) => stateIds[key] === row.stateid,
       );
       if (!stateName) continue;
 
@@ -1236,7 +1239,7 @@ export class TicketService {
       const yearNum = parseInt(row.year_num, 10);
 
       const monthIndex = monthIndexMap.findIndex(
-        (m) => m.month === monthNum && m.year === yearNum
+        (m) => m.month === monthNum && m.year === yearNum,
       );
 
       if (monthIndex !== -1) {
@@ -1247,7 +1250,7 @@ export class TicketService {
     const totalCases = raw.reduce((sum, r) => sum + parseInt(r.count, 10), 0);
 
     return {
-      title: "Estado de Casos",
+      title: 'Estado de Casos',
       description: `Total de casos: ${totalCases}`,
       categories: monthIndexMap.map((m) => m.label), // Ej: ['Abr 2025', 'May 2025', ...]
       series: stateNames.map((name) => ({
@@ -1264,7 +1267,7 @@ export class TicketService {
       startDate?: string;
       endDate?: string;
       branchIds?: string[];
-    } = {}
+    } = {},
   ): Promise<{
     data: DashboardChartGroupBar;
   }> {
@@ -1276,7 +1279,7 @@ export class TicketService {
       const cacheKey = `agent-performance:${
         user.id
       }:${agentCount}:${startDate}:${endDateFormated}:${
-        branchIds?.join(",") || "all"
+        branchIds?.join(',') || 'all'
       }`;
       const cached = await this.cacheManager.getCache<{
         data: DashboardChartGroupBar;
@@ -1287,43 +1290,43 @@ export class TicketService {
       const lastState = await this.ticketStateService.findLastTicketState();
 
       if (!lastState) {
-        throw new Error("No se pudo determinar el último estado de ticket");
+        throw new Error('No se pudo determinar el último estado de ticket');
       }
 
       const categories = this.generateMonthLabels(startDate, endDateFormated);
 
       // 2. Obtener todos los tickets del rango y su información
       const rawData = await this.ticketRepository
-        .createQueryBuilder("ticket")
-        .innerJoin("ticket.assignedUsers", "assignment")
-        .innerJoin("assignment.user", "user")
-        .innerJoin("user.role", "role")
-        .innerJoin("ticket.ticketState", "state")
-        .where("role.isAgent = true")
+        .createQueryBuilder('ticket')
+        .innerJoin('ticket.assignedUsers', 'assignment')
+        .innerJoin('assignment.user', 'user')
+        .innerJoin('user.role', 'role')
+        .innerJoin('ticket.ticketState', 'state')
+        .where('role.isAgent = true')
         // .andWhere('user.companyId = :companyId', { companyId: user.companyId })
-        .andWhere("assignment.state = true")
-        .andWhere("ticket.createdAt BETWEEN :startDate AND :endDate", {
+        .andWhere('assignment.state = true')
+        .andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
           startDate: startDate,
           endDate: endDateFormated,
         })
-        .andWhere("state.id = :lastStateId", { lastStateId: lastState.id })
+        .andWhere('state.id = :lastStateId', { lastStateId: lastState.id })
         .andWhere(
-          branchIds?.length ? "ticket.branchId IN (:...branchIds)" : "1=1",
+          branchIds?.length ? 'ticket.branchId IN (:...branchIds)' : '1=1',
           {
             branchIds,
-          }
+          },
         )
         .select([
-          "user.id as user_id",
-          "user.name as user_name",
-          "user.lastname as user_lastname",
-          "EXTRACT(MONTH FROM ticket.createdAt) as month_num",
-          "EXTRACT(YEAR FROM ticket.createdAt) as year_num",
-          "COUNT(ticket.id) as count",
+          'user.id as user_id',
+          'user.name as user_name',
+          'user.lastname as user_lastname',
+          'EXTRACT(MONTH FROM ticket.createdAt) as month_num',
+          'EXTRACT(YEAR FROM ticket.createdAt) as year_num',
+          'COUNT(ticket.id) as count',
         ])
-        .groupBy("user.id, user.name, user.lastname, month_num, year_num")
-        .orderBy("year_num", "ASC")
-        .addOrderBy("month_num", "ASC")
+        .groupBy('user.id, user.name, user.lastname, month_num, year_num')
+        .orderBy('year_num', 'ASC')
+        .addOrderBy('month_num', 'ASC')
         .getRawMany();
 
       // 3. Agrupar por agente
@@ -1335,7 +1338,7 @@ export class TicketService {
         const agentName = `${row.user_name} ${row.user_lastname}`;
         const label = this.formatMonthLabel(
           parseInt(row.month_num),
-          parseInt(row.year_num)
+          parseInt(row.year_num),
         );
         const index = categories.indexOf(label);
 
@@ -1359,12 +1362,12 @@ export class TicketService {
 
       const totalTickets = series.reduce(
         (sum, agent) => sum + agent.data.reduce((a, b) => a + b, 0),
-        0
+        0,
       );
 
       const result = {
         data: {
-          title: "Rendimiento por Agente",
+          title: 'Rendimiento por Agente',
           description: `Total de tickets completados: ${totalTickets}`,
           categories,
           series,
@@ -1374,45 +1377,45 @@ export class TicketService {
       await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
       return result;
     } catch (error) {
-      console.error("Error en getAgentPerformance:", error);
+      console.error('Error en getAgentPerformance:', error);
       throw new InternalServerErrorException(
-        "No se pudo obtener el rendimiento por agente."
+        'No se pudo obtener el rendimiento por agente.',
       );
     }
   }
 
   private formatMonthLabel(month: number, year: number): string {
     const monthNames = [
-      "Ene",
-      "Feb",
-      "Mar",
-      "Abr",
-      "May",
-      "Jun",
-      "Jul",
-      "Ago",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dic",
+      'Ene',
+      'Feb',
+      'Mar',
+      'Abr',
+      'May',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dic',
     ];
     return `${monthNames[month - 1]} ${year}`;
   }
 
   private generateMonthLabels(startDate: string, endDate: string): string[] {
     const monthNames = [
-      "Ene",
-      "Feb",
-      "Mar",
-      "Abr",
-      "May",
-      "Jun",
-      "Jul",
-      "Ago",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dic",
+      'Ene',
+      'Feb',
+      'Mar',
+      'Abr',
+      'May',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dic',
     ];
     const labels: string[] = [];
 
@@ -1422,12 +1425,12 @@ export class TicketService {
     let current = new Date(
       parsedStartDate.getFullYear(),
       parsedStartDate.getMonth(),
-      1
+      1,
     );
     const end = new Date(
       parsedEndDate.getFullYear(),
       parsedEndDate.getMonth(),
-      1
+      1,
     );
 
     while (current <= end) {
@@ -1442,27 +1445,27 @@ export class TicketService {
   }
 
   private formatedEndDate(dateStr: string): string {
-    const [day, month, year] = dateStr.split("/");
+    const [day, month, year] = dateStr.split('/');
     return `${year}-${month}-${day}T23:59:59`;
   }
 
   private getMonthNamesBetween(
     startDate: string,
-    endDate: string
+    endDate: string,
   ): { label: string; month: number; year: number }[] {
     const monthNames = [
-      "Ene",
-      "Feb",
-      "Mar",
-      "Abr",
-      "May",
-      "Jun",
-      "Jul",
-      "Ago",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dic",
+      'Ene',
+      'Feb',
+      'Mar',
+      'Abr',
+      'May',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dic',
     ];
     const result: { label: string; month: number; year: number }[] = [];
     const parsedStartDate = new Date(startDate);
@@ -1471,17 +1474,17 @@ export class TicketService {
     const start = new Date(
       parsedStartDate.getFullYear(),
       parsedStartDate.getMonth(),
-      1
+      1,
     );
     const end = new Date(
       parsedEndDate.getFullYear(),
       parsedEndDate.getMonth(),
-      1
+      1,
     );
 
     let current = new Date(start);
     if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
-      console.error("Fechas inválidas:", { startDate, endDate });
+      console.error('Fechas inválidas:', { startDate, endDate });
       // return result;
     }
     while (current <= end) {
