@@ -33,123 +33,6 @@ export class AssignedUserTicketService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async create_(dto: CreateAssignedUserTicketDto) {
-    const queryRunner = this.dataSource.createQueryRunner();
-
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      const { userId, ticketId } = dto;
-
-      const user = await this.getUserById(userId);
-      const ticket = await this.getTicketById(ticketId);
-
-      if (!user)
-        throw new BadRequestException(`User with id ${userId} not found`);
-      if (!ticket)
-        throw new BadRequestException(`Ticket with id ${ticketId} not found`);
-      // Validar si el usuario ya está asignado al ticket con state=true
-      await this.ensureAssignmentDoesNotExist(userId, ticketId);
-
-      const lastState = await this.ticketStateService.findLastTicketState();
-
-      if (user.limite_ticket) {
-        const ticketsAsignados = await queryRunner.manager
-          .createQueryBuilder(AssignedUserTicket, 'assigned')
-          .innerJoin('assigned.ticket', 'ticket')
-          .innerJoin('ticket.ticketState', 'state')
-          .where('assigned.userId = :userId', { userId })
-          .andWhere('assigned.state = true')
-          .andWhere('state.id != :cerradoStateId', {
-            cerradoStateId: lastState.id,
-          })
-          .getCount();
-
-        if (ticketsAsignados >= user.limite_ticket) {
-          throw new BadRequestException(
-            `El agente "${user.name}" ha alcanzado su límite de tickets activos (${user.limite_ticket}).`,
-          );
-        }
-      }
-
-      // Actualizar a false todos los anteriores assignedUserTicket del mismo ticket
-      await queryRunner.manager.update(
-        AssignedUserTicket,
-        { ticketId, state: true },
-        { state: false },
-      );
-
-      // Crear nuevo registro con estado = true (o el que venga en el dto)
-      const assignedUserTicket = queryRunner.manager.create(
-        AssignedUserTicket,
-        {
-          ...dto,
-          estado: true,
-        },
-      );
-
-      const savedAssignedUserTicket =
-        await queryRunner.manager.save(assignedUserTicket);
-
-      await queryRunner.commitTransaction();
-
-      const userData = await this.getUserById(userId);
-      const ticketData = await this.getTicketById(ticketId);
-      const emailData = {
-        fullname: `${userData.name} ${userData.lastname}` || 'User',
-        ticketState: ticketData.ticketState.description,
-        prefix: ticketData.ticketTitle.ticketCategory.prefix,
-        ticketId: ticketData.id,
-        ticketNumber: ticketData.ticketNumber,
-        ticketTitle: ticketData.ticketTitle.description,
-        ticketPriority: ticketData.ticketTitle.ticketPriority.title,
-        estimatedTime: `${ticketData.ticketTitle.ticketPriority.hoursResponse} horas`,
-        ticketCreatedAt: ticketData.createdAt,
-      };
-
-      let emailStatus = 'Ticket reasignado exitosamente';
-      try {
-        emailData['fullname'] = userData?.name + ' ' + userData?.lastname;
-        const company = await this.userService.findById(userData.companyId);
-        let to=userData?.email;
-        if (company?.email) {
-            to=`${userData?.email},${company.email}`;
-        }
-        await this.emailService.sendEmail(
-          to,
-          `Reasignacion ${ticket.ticketTitle.ticketCategory.prefix}-${ticket.ticketNumber}`,
-          'email-template-assigned.html',
-          emailData,
-        );
-      } catch (error) {
-        emailStatus =
-          'El ticket se reasignó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.';
-      }
-
-      await this.cacheManager.delCache('assignedUserTickets:*');
-
-      return {
-        data: savedAssignedUserTicket,
-        message: emailStatus,
-      };
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-
-      if (
-        error instanceof BadRequestException ||
-        error instanceof NotFoundException
-      ) {
-        throw error;
-      }
-
-      throw new InternalServerErrorException(
-        `Error creating AssignedUserTicket: ${error.message}`,
-      );
-    } finally {
-      await queryRunner.release();
-    }
-  }
 
   async create(dto: CreateAssignedUserTicketDto) {
     const queryRunner = this.dataSource.createQueryRunner();
@@ -247,7 +130,7 @@ export class AssignedUserTicketService {
 
       let emailStatus = 'Ticket reasignado exitosamente';
       try {
-        const company = await this.userService.findById(userData.companyId);
+        const company = await this.userService.findCompanyById(userData.companyId);
         let to = userData.email;
         if (company?.email) {
           to = `${userData.email},${company.email}`;

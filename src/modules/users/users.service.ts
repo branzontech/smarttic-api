@@ -215,6 +215,25 @@ export class UsersService {
     return user;
   }
 
+  async findCompanyById(id: string): Promise<User> {
+    const cacheKey = `userCompany:${id}`;
+    const cachedUser = await this.cacheManager.getCache<User>(cacheKey);
+    if (cachedUser) return cachedUser;
+
+    const user = await this.userRepository.findOne({
+      where: { id },
+      relations: ['role'],
+    });
+    if (!user) throw new NotFoundException(`User with id ${id} not found`);
+    delete (user as User).password;
+    (user as any).branches = user.assignedBranches.map(
+      (branch) => branch.branchId,
+    );
+
+    await this.cacheManager.setCache(cacheKey, user, CACHE_TTL);
+    return user;
+  }
+
   async findDefaultAgents(branchId?: string): Promise<User[]> {
     return this.userRepository.find({
       where: [
