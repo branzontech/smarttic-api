@@ -71,10 +71,12 @@ export class TicketService {
       let selectedAgent: User | null = null;
 
       for (const agent of defaultAgents) {
-        if (!agent.limite_ticket) continue;
+        if (!agent.limite_ticket || agent.limite_ticket === 0) {
+          selectedAgent = agent;
+          break;
+        }
 
         const assignedCount = await this.assignedUserTicketRepository
-
           .createQueryBuilder('assigned')
           .innerJoin('assigned.ticket', 'ticket')
           .innerJoin('ticket.ticketState', 'state')
@@ -83,12 +85,10 @@ export class TicketService {
           .andWhere('state.id != :cerradoStateId', {
             cerradoStateId: lastState.id,
           })
-
           .getCount();
 
         if (assignedCount < agent.limite_ticket) {
           selectedAgent = agent;
-
           break;
         }
       }
