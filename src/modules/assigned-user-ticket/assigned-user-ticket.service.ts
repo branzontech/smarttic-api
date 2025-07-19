@@ -55,8 +55,8 @@ export class AssignedUserTicketService {
       const lastState = await this.ticketStateService.findLastTicketState();
 
       if (user.limite_ticket) {
-        const ticketsAsignados = await this.assignedUserTicketRepository
-          .createQueryBuilder('assigned')
+        const ticketsAsignados = await queryRunner.manager
+          .createQueryBuilder(AssignedUserTicket, 'assigned')
           .innerJoin('assigned.ticket', 'ticket')
           .innerJoin('ticket.ticketState', 'state')
           .where('assigned.userId = :userId', { userId })
@@ -68,7 +68,7 @@ export class AssignedUserTicketService {
 
         if (ticketsAsignados >= user.limite_ticket) {
           throw new BadRequestException(
-            `El agente ${user.name} ha alcanzado su límite de tickets activos (${user.limite_ticket}).`,
+            `El agente "${user.name}" ha alcanzado su límite de tickets activos (${user.limite_ticket}).`,
           );
         }
       }
@@ -93,7 +93,7 @@ export class AssignedUserTicketService {
         await queryRunner.manager.save(assignedUserTicket);
 
       await queryRunner.commitTransaction();
-      
+
       const userData = await this.getUserById(userId);
       const ticketData = await this.getTicketById(ticketId);
       const emailData = {
@@ -152,146 +152,144 @@ export class AssignedUserTicketService {
   }
 
   async create(dto: CreateAssignedUserTicketDto) {
-  const queryRunner = this.dataSource.createQueryRunner();
-  await queryRunner.connect();
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
 
-  try {
-    await queryRunner.startTransaction();
+    try {
+      await queryRunner.startTransaction();
 
-    const { userId, ticketId } = dto;
+      const { userId, ticketId } = dto;
 
-    const user = await queryRunner.manager.findOne(User, {
-      where: { id: userId },
-    });
-    const ticket = await queryRunner.manager.findOne(Ticket, {
-      where: { id: ticketId },
-      relations: ['ticketTitle', 'ticketTitle.ticketCategory', 'ticketState'],
-    });
+      const user = await queryRunner.manager.findOne(User, {
+        where: { id: userId },
+      });
+      const ticket = await queryRunner.manager.findOne(Ticket, {
+        where: { id: ticketId },
+        relations: ['ticketTitle', 'ticketTitle.ticketCategory', 'ticketState'],
+      });
 
-    if (!user)
-      throw new BadRequestException(`User with id ${userId} not found`);
-    if (!ticket)
-      throw new BadRequestException(`Ticket with id ${ticketId} not found`);
+      if (!user)
+        throw new BadRequestException(`User with id ${userId} not found`);
+      if (!ticket)
+        throw new BadRequestException(`Ticket with id ${ticketId} not found`);
 
-    // Validar si ya está asignado el usuario a ese ticket
-    const existingAssignment = await queryRunner.manager.findOne(
-      AssignedUserTicket,
-      {
-        where: { userId, ticketId, state: true },
-      }
-    );
-
-    if (existingAssignment) {
-      throw new BadRequestException(
-        `El usuario ya está asignado al ticket ${ticketId}.`
+      // Validar si ya está asignado el usuario a ese ticket
+      const existingAssignment = await queryRunner.manager.findOne(
+        AssignedUserTicket,
+        {
+          where: { userId, ticketId, state: true },
+        }
       );
-    }
 
-    const lastState = await this.ticketStateService.findLastTicketState();
-
-    // Verificar límite de tickets activos
-    if (user.limite_ticket) {
-      const ticketsAsignados = await queryRunner.manager
-        .createQueryBuilder(AssignedUserTicket, 'assigned')
-        .innerJoin('assigned.ticket', 'ticket')
-        .innerJoin('ticket.ticketState', 'state')
-        .where('assigned.userId = :userId', { userId })
-        .andWhere('assigned.state = true')
-        .andWhere('state.id != :cerradoStateId', {
-          cerradoStateId: lastState.id,
-        })
-        .getCount();
-
-      if (ticketsAsignados >= user.limite_ticket) {
+      if (existingAssignment) {
         throw new BadRequestException(
-          `El agente ${user.name} ha alcanzado su límite de tickets activos (${user.limite_ticket}).`
+          `El usuario ya está asignado al ticket ${ticketId}.`
         );
       }
-    }
 
-    // Desactivar anteriores asignaciones del ticket
-    await queryRunner.manager.update(
-      AssignedUserTicket,
-      { ticketId, state: true },
-      { state: false }
-    );
+      const lastState = await this.ticketStateService.findLastTicketState();
 
-    // Crear nueva asignación
-    const assignedUserTicket = queryRunner.manager.create(
-      AssignedUserTicket,
-      {
-        ...dto,
-        state: true,
-      }
-    );
+      if (user.limite_ticket) {
+        const ticketsAsignados = await queryRunner.manager
+          .createQueryBuilder(AssignedUserTicket, 'assigned')
+          .innerJoin('assigned.ticket', 'ticket')
+          .innerJoin('ticket.ticketState', 'state')
+          .where('assigned.userId = :userId', { userId })
+          .andWhere('assigned.state = true')
+          .andWhere('state.id != :cerradoStateId', {
+            cerradoStateId: lastState.id,
+          })
+          .getCount();
 
-    const savedAssignedUserTicket = await queryRunner.manager.save(
-      assignedUserTicket
-    );
-
-    await queryRunner.commitTransaction();
-
-    // Email fuera de la transacción
-    const userData = await this.getUserById(userId);
-    const ticketData = await this.getTicketById(ticketId);
-
-    const emailData = {
-      fullname: `${userData.name} ${userData.lastname}` || 'User',
-      ticketState: ticketData.ticketState.description,
-      prefix: ticketData.ticketTitle.ticketCategory.prefix,
-      ticketId: ticketData.id,
-      ticketNumber: ticketData.ticketNumber,
-      ticketTitle: ticketData.ticketTitle.description,
-      ticketPriority: ticketData.ticketTitle.ticketPriority.title,
-      estimatedTime: `${ticketData.ticketTitle.ticketPriority.hoursResponse} horas`,
-      ticketCreatedAt: ticketData.createdAt,
-    };
-
-    let emailStatus = 'Ticket reasignado exitosamente';
-    try {
-      const company = await this.userService.findById(userData.companyId);
-      let to = userData.email;
-      if (company?.email) {
-        to = `${userData.email},${company.email}`;
+        if (ticketsAsignados >= user.limite_ticket) {
+          throw new BadRequestException(
+            `El agente "${user.name}" ha alcanzado su límite de tickets activos (${user.limite_ticket}).`,
+          );
+        }
       }
 
-      await this.emailService.sendEmail(
-        to,
-        `Reasignación ${emailData.prefix}-${emailData.ticketNumber}`,
-        'email-template-assigned.html',
-        emailData
+      // Desactivar anteriores asignaciones del ticket
+      await queryRunner.manager.update(
+        AssignedUserTicket,
+        { ticketId, state: true },
+        { state: false }
       );
+
+      // Crear nueva asignación
+      const assignedUserTicket = queryRunner.manager.create(
+        AssignedUserTicket,
+        {
+          ...dto,
+          state: true,
+        }
+      );
+
+      const savedAssignedUserTicket =
+        await queryRunner.manager.save(assignedUserTicket);
+
+      await queryRunner.commitTransaction();
+
+      // Email fuera de la transacción
+      const userData = await this.getUserById(userId);
+      const ticketData = await this.getTicketById(ticketId);
+
+      const emailData = {
+        fullname: `${userData.name} ${userData.lastname}` || 'User',
+        ticketState: ticketData.ticketState.description,
+        prefix: ticketData.ticketTitle.ticketCategory.prefix,
+        ticketId: ticketData.id,
+        ticketNumber: ticketData.ticketNumber,
+        ticketTitle: ticketData.ticketTitle.description,
+        ticketPriority: ticketData.ticketTitle.ticketPriority.title,
+        estimatedTime: `${ticketData.ticketTitle.ticketPriority.hoursResponse} horas`,
+        ticketCreatedAt: ticketData.createdAt,
+      };
+
+      let emailStatus = 'Ticket reasignado exitosamente';
+      try {
+        const company = await this.userService.findById(userData.companyId);
+        let to = userData.email;
+        if (company?.email) {
+          to = `${userData.email},${company.email}`;
+        }
+
+        await this.emailService.sendEmail(
+          to,
+          `Reasignación ${emailData.prefix}-${emailData.ticketNumber}`,
+          'email-template-assigned.html',
+          emailData,
+        );
+      } catch (error) {
+        emailStatus =
+          'El ticket se reasignó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.';
+      }
+
+      await this.cacheManager.delCache('assignedUserTickets:*');
+
+      return {
+        data: savedAssignedUserTicket,
+        message: emailStatus,
+      };
     } catch (error) {
-      emailStatus =
-        'El ticket se reasignó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.';
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        `Error creating AssignedUserTicket: ${error.message}`
+      );
+    } finally {
+      await queryRunner.release();
     }
-
-    await this.cacheManager.delCache('assignedUserTickets:*');
-
-    return {
-      data: savedAssignedUserTicket,
-      message: emailStatus,
-    };
-  } catch (error) {
-    if (queryRunner.isTransactionActive) {
-      await queryRunner.rollbackTransaction();
-    }
-
-    if (
-      error instanceof BadRequestException ||
-      error instanceof NotFoundException
-    ) {
-      throw error;
-    }
-
-    throw new InternalServerErrorException(
-      `Error creating AssignedUserTicket: ${error.message}`
-    );
-  } finally {
-    await queryRunner.release();
   }
-}
-
+  
 
   async findAll(skip: number = 0, take: number = 10, filter?: string) {
     try {
@@ -385,23 +383,27 @@ export class AssignedUserTicketService {
 
         const lastState = await this.ticketStateService.findLastTicketState();
 
-        if (agente?.limite_ticket) {
-          const ticketsAsignados = await this.assignedUserTicketRepository
-            .createQueryBuilder('assigned')
-            .innerJoin('assigned.ticket', 'ticket')
-            .innerJoin('ticket.ticketState', 'state')
-            .where('assigned.userId = :userId', { userId: agente.id })
-            .andWhere('assigned.state = true')
-            .andWhere('state.id != :cerradoStateId', {
-              cerradoStateId: lastState.id,
-            })
-            .getCount();
+        if (agente.limite_ticket === null || agente.limite_ticket === 0) {
+          throw new BadRequestException(
+            `No se puede asignar un ticket al agente "${agente.name}" porque no tiene un límite de tickets configurado. Por favor, establezca un límite mayor a 0 antes de asignarle tickets.`,
+          );
+        }
 
-          if (ticketsAsignados >= agente.limite_ticket) {
-            throw new BadRequestException(
-              `El agente ${agente.name} ha alcanzado su límite de tickets activos (${agente.limite_ticket}).`,
-            );
-          }
+        const ticketsAsignados = await this.assignedUserTicketRepository
+          .createQueryBuilder('assigned')
+          .innerJoin('assigned.ticket', 'ticket')
+          .innerJoin('ticket.ticketState', 'state')
+          .where('assigned.userId = :userId', { userId: agente.id })
+          .andWhere('assigned.state = true')
+          .andWhere('state.id != :cerradoStateId', {
+            cerradoStateId: lastState.id,
+          })
+          .getCount();
+
+        if (ticketsAsignados >= agente.limite_ticket) {
+          throw new BadRequestException(
+            `El agente "${agente.name}" ha alcanzado su límite de tickets activos (${agente.limite_ticket}).`,
+          );
         }
       }
 
