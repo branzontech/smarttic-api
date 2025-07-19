@@ -217,12 +217,20 @@ export class UsersService {
 
   async findDefaultAgents(branchId?: string): Promise<User[]> {
     return this.userRepository.find({
-      where: {
-        branchId: branchId ?? Not(IsNull()),
-        isAgentDefault: true,
-        state: true,
-        role: { isAgent: true },
-      },
+      where: [
+        {
+          branchId: branchId,
+          isAgentDefault: true,
+          state: true,
+          role: { isAgent: true },
+        },
+        {
+          branchId: IsNull(),
+          isAgentDefault: true,
+          state: true,
+          role: { isAgent: true },
+        },
+      ],
       relations: ['role'],
     });
   }
