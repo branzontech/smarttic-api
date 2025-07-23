@@ -6,12 +6,13 @@ import {
   HttpException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, IsNull, Not, Repository } from 'typeorm';
+import { EntityManager, ILike, IsNull, Not, Repository } from 'typeorm';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { TicketTitle } from './entities/ticket-title.entity';
 import { CreateTicketTitleDto } from './dto/create-ticket-title.dto';
 import { UpdateTicketTitleDto } from './dto/update-ticket-title.dto';
 import { CACHE_TTL } from 'src/common/constants';
+import { TicketCategory } from '../ticket-category/entities/ticket-category.entity';
 
 @Injectable()
 export class TicketTitleService {
@@ -43,7 +44,7 @@ export class TicketTitleService {
       return savedTitle;
     } catch (error) {
       if (error instanceof ConflictException) {
-        throw error; 
+        throw error;
       }
       if (error instanceof HttpException) {
         throw error;
@@ -57,7 +58,7 @@ export class TicketTitleService {
 
   async findAll(skip: number = 0, take: number = 10, filter?: string) {
     try {
-      const cacheKey = `ticketTitles:skip:${skip}:take:${take}:filter:${filter || ''}`;  
+      const cacheKey = `ticketTitles:skip:${skip}:take:${take}:filter:${filter || ''}`;
       const cachedData = await this.cacheManager.getCache<{
         data: TicketTitle[];
         total: number;
@@ -83,7 +84,10 @@ export class TicketTitleService {
       }
 
       // Paginado después de filtrar
-      queryBuilder.orderBy('ticketTitles.createdAt', 'DESC').skip(skip).take(take);
+      queryBuilder
+        .orderBy('ticketTitles.createdAt', 'DESC')
+        .skip(skip)
+        .take(take);
 
       const [titles, total] = await queryBuilder.getManyAndCount();
 
@@ -123,7 +127,37 @@ export class TicketTitleService {
     }
   }
 
-  async findAllAvailable(ticketCategoryId?: string, id?: string): Promise<TicketTitle[]> {
+  async hasPreapprovalInCategory(titleId: string, manager?: EntityManager): Promise<boolean> {
+    const repo = manager ? manager.getRepository(TicketTitle) : this.ticketTitleRepository;
+    
+    try {
+        const result = await repo.findOne({
+            where: { id: titleId },
+            relations: ['ticketCategory'],
+        });
+
+        if (!result) {
+            throw new NotFoundException(`Título de ticket con ID '${titleId}' no encontrado.`);
+        }
+        const ticketWithCategory = result as TicketTitle & { ticketCategory: TicketCategory };
+        if (!ticketWithCategory.ticketCategory) {
+            throw new NotFoundException(`Categoría no encontrada para el título de ticket con ID '${titleId}'.`);
+        }
+
+        return Boolean(ticketWithCategory.ticketCategory.preapproval);
+    } catch (error) {
+        console.error('Error en hasPreapprovalInCategory:', error);        
+        if (error instanceof HttpException) {
+            throw error;
+        }        
+        throw new InternalServerErrorException('No se pudo verificar el preapproval.');
+    }
+  }
+
+  async findAllAvailable(
+    ticketCategoryId?: string,
+    id?: string,
+  ): Promise<TicketTitle[]> {
     try {
       const cacheKey = `ticketTitleByCategoryId:${ticketCategoryId ?? 'null'}`;
       let titles = await this.cacheManager.getCache<TicketTitle[]>(cacheKey);
@@ -154,19 +188,22 @@ export class TicketTitleService {
     }
   }
 
-
-  async findByCategory(ticketCategoryId: string): Promise<{data:TicketTitle[]}> {
+  async findByCategory(
+    ticketCategoryId: string,
+  ): Promise<{ data: TicketTitle[] }> {
     try {
       const cacheKey = `ticketTitle:category-${ticketCategoryId}`;
       let titles = await this.cacheManager.getCache<TicketTitle[]>(cacheKey);
 
       // if (!titles) {
-        titles = await this.ticketTitleRepository.find({ where: { ticketCategoryId } });
-        
-        await this.cacheManager.setCache(cacheKey, titles);
+      titles = await this.ticketTitleRepository.find({
+        where: { ticketCategoryId },
+      });
+
+      await this.cacheManager.setCache(cacheKey, titles);
       // }
 
-      return {data:titles};
+      return { data: titles };
     } catch (error) {
       console.error('Error en findOne:', error);
       throw new InternalServerErrorException(
@@ -175,16 +212,20 @@ export class TicketTitleService {
     }
   }
 
- async update(
+  async update(
     id: string,
     updateTicketTitleDto: UpdateTicketTitleDto,
   ): Promise<TicketTitle> {
     try {
       // 1. Verificar si existe el título a actualizar
-      const existingTitle = await this.ticketTitleRepository.findOne({ where: { id } });
-      
+      const existingTitle = await this.ticketTitleRepository.findOne({
+        where: { id },
+      });
+
       if (!existingTitle) {
-        throw new NotFoundException(`Título de ticket con ID '${id}' no encontrado.`);
+        throw new NotFoundException(
+          `Título de ticket con ID '${id}' no encontrado.`,
+        );
       }
 
       // 2. Si se está actualizando la descripción, validar que no exista otra igual
@@ -196,7 +237,7 @@ export class TicketTitleService {
         const duplicateTitle = await this.ticketTitleRepository.findOne({
           where: {
             description: ILike(normalizedDescription),
-            id: Not(id)
+            id: Not(id),
           },
         });
 
@@ -220,7 +261,7 @@ export class TicketTitleService {
       return updatedTitle;
     } catch (error) {
       if (error instanceof ConflictException) {
-        throw error; 
+        throw error;
       }
       if (error instanceof HttpException) {
         throw error;

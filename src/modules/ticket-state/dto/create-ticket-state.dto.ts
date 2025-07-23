@@ -28,6 +28,26 @@ export class CreateTicketStateDto {
   @IsNumber({}, { message: 'orderTicket debe ser un número.' })
   @IsOptional()
   orderTicket?: number;
+  
+  @ApiPropertyOptional({
+    description: 'Indica si este estado es el inicial para revisión/preaprobación',
+    type: Boolean,
+    example: false,
+    default: false,
+  })
+  @IsBoolean({ message: 'isInitialPreapproval debe ser un valor booleano.' })
+  @IsOptional()
+  isInitialPreapproval?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Indica si este estado es el de rechazo para revisión/preaprobación',
+    type: Boolean,
+    example: false,
+    default: false,
+  })
+  @IsBoolean({ message: 'isRejectedPreapproval debe ser un valor booleano.' })
+  @IsOptional()
+  isRejectedPreapproval?: boolean;
 
   @ApiPropertyOptional({
     description: 'Estado del registro del estado del ticket',

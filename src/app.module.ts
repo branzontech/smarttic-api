@@ -27,6 +27,7 @@ import { FormsModule } from './modules/forms/forms.module';
 import { FormFieldsModule } from './modules/form-fields/form-fields.module';
 import { FormResponsesModule } from './modules/form-responses/form-responses.module';
 import { FormResponseFilesModule } from './modules/form-response-files/form-response-files.module';
+import { NoteAgentTicketsModule } from './modules/note-agent-tickets/note-agent-tickets.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -57,7 +58,8 @@ import { FormResponseFilesModule } from './modules/form-response-files/form-resp
     FormsModule,
     FormFieldsModule,
     FormResponsesModule,
-    FormResponseFilesModule
+    FormResponseFilesModule,
+    NoteAgentTicketsModule
   ],
   controllers: [],
   providers: [

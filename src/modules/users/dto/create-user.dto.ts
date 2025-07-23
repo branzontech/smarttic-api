@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsNumber,
   IsArray,
+  Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -163,6 +164,29 @@ export class CreateUserDto {
   @IsBoolean({ message: 'The isAgentDefault must be a boolean.' })
   isAgentDefault?: boolean;
 
+  @ApiProperty({
+    description: 'Limit of tickets that the agent can manage',
+    type: Number,
+    example: 10,
+  })
+  @IsOptional()
+  @IsNumber({}, { message: 'The limit must be a number.' })
+  @Min(0, { message: 'The ticket limit cannot be negative.' })
+  limite_ticket: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Indicates whether the user is the designated approving usuario',
+    type: Boolean,
+    example: false,
+    required: false,
+  })
+  @IsOptional()
+  @IsBoolean({
+    message: 'The isDesignatedApprover field must be a boolean value.',
+  })
+  isDesignatedApprover?: boolean;
+
   @ApiPropertyOptional({
     description: 'The state of the user',
     type: Boolean,
@@ -173,11 +197,4 @@ export class CreateUserDto {
   @IsOptional()
   @IsBoolean({ message: 'The state must be a boolean.' })
   state?: boolean;
-  @ApiProperty({
-    description: 'Limit of tickets that the agent can manage',
-    type: Number,
-    example: 10,
-  })
-  @IsNumber({}, { message: 'The limit must be a number.' })
-  limite_ticket: number;
 }

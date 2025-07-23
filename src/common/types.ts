@@ -16,6 +16,7 @@ export type userSession = {
   companyname: string;
   companyId: string;
   branchId: string;
+  isDesignatedApprover: boolean;
   branches?: userSessionBranch[] | null;
   role: {
     id: string;

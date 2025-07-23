@@ -39,6 +39,11 @@ export class CreateTicketCategoryDto {
   })
   prefix: string;
 
+  @IsBoolean()
+  @IsOptional()
+  @ApiProperty({ required: false, default: false, description: 'Indica si la categoría tiene aprobación inicial' })
+  preapproval?: boolean;
+
   @ApiPropertyOptional({
     description: 'Estado activo/inactivo de la categoría',
     type: Boolean,

@@ -1,6 +1,7 @@
 import { AssignedUserTicket } from 'src/modules/assigned-user-ticket/entities/assigned-user-ticket.entity';
 import { Branch } from 'src/modules/branch/entities/branch.entity';
 import { FormResponse } from 'src/modules/form-responses/entities/form-response.entity';
+import { NoteAgentTicket } from 'src/modules/note-agent-tickets/entities/note-agent-ticket.entity';
 import { SurveyResponse } from 'src/modules/survey-response/entities/survey-response.entity';
 import { TicketDetail } from 'src/modules/ticket-detail/entities/ticket-detail.entity';
 import { TicketState } from 'src/modules/ticket-state/entities/ticket-state.entity';
@@ -67,6 +68,9 @@ export class Ticket {
 
   @OneToMany(() => AssignedUserTicket, (assignedUserTicket) => assignedUserTicket.ticket)
   assignedUsers: AssignedUserTicket[];
+
+  @OneToMany(() => NoteAgentTicket, (noteAgentTicket) => noteAgentTicket.ticket)
+  notes: NoteAgentTicket[];
 
   @ManyToOne(() => Branch, (branch) => branch.tickets, { nullable: true, onDelete: 'SET NULL' })
   branch?: Branch;

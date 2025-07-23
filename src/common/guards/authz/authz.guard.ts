@@ -66,6 +66,7 @@ export class AuthzGuard implements CanActivate {
       companyname: user.companyname,
       companyId: user.companyId,
       branchId: user.branchId,
+      isDesignatedApprover: user.isDesignatedApprover,
       branches: user.assignedBranches?.map((assigned) => ({
         id: assigned.branch.id,
         name: assigned.branch.name,

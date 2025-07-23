@@ -6,7 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, SelectQueryBuilder } from 'typeorm';
+import { EntityManager, Repository, SelectQueryBuilder } from 'typeorm';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { Ticket } from './entities/ticket.entity';
 import { CreateTicketDto } from './dto/create-ticket.dto';
@@ -27,6 +27,8 @@ import { FormResponse } from '../form-responses/entities/form-response.entity';
 import { FormResponseFile } from '../form-response-files/entities/form-response-file.entity';
 import { TicketState } from '../ticket-state/entities/ticket-state.entity';
 import { User } from '../users/entities/user.entity';
+import { TicketTitleService } from '../ticket-title/ticket-title.service';
+import { NoteAgentTicket } from '../note-agent-tickets/entities/note-agent-ticket.entity';
 
 @Injectable()
 export class TicketService {
@@ -45,6 +47,7 @@ export class TicketService {
     private readonly emailService: EmailService,
     private readonly cacheManager: CacheManagerService,
     private readonly ticketStateService: TicketStateService,
+    private readonly ticketTitleService: TicketTitleService,
   ) {}
 
   async create(
@@ -52,80 +55,68 @@ export class TicketService {
     user: userSession,
     files: Express.Multer.File[],
   ): Promise<{ data: Ticket; message: string }> {
-    const queryRunner =
-      this.ticketRepository.manager.connection.createQueryRunner();
-
+    const queryRunner = this.ticketRepository.manager.connection.createQueryRunner();
     await queryRunner.connect();
-
     await queryRunner.startTransaction();
 
     try {
+      // VALIDACIONES BÁSICAS
       if (!user?.id) throw new BadRequestException('Usuario no autenticado');
-      const ticketState = await this.ticketStateService.findByOrder(1);
-      const lastState = await this.ticketStateService.findLastTicketState();
-      // Buscar todos los agente por defecto de la sucursal
-      const defaultAgents = await this.userService.findDefaultAgents(
-        user.branchId,
-      );
-
-      let selectedAgent: User | null = null;
-
-      for (const agent of defaultAgents) {
-        if (!agent.limite_ticket || agent.limite_ticket === 0) {
-          selectedAgent = agent;
-          break;
-        }
-
-        const assignedCount = await this.assignedUserTicketRepository
-          .createQueryBuilder('assigned')
-          .innerJoin('assigned.ticket', 'ticket')
-          .innerJoin('ticket.ticketState', 'state')
-          .where('assigned.userId = :userId', { userId: agent.id })
-          .andWhere('assigned.state = true')
-          .andWhere('state.id != :cerradoStateId', {
-            cerradoStateId: lastState.id,
-          })
-          .getCount();
-
-        if (assignedCount < agent.limite_ticket) {
-          selectedAgent = agent;
-          break;
-        }
+      if (!createTicketDto.ticketTitleId) {
+        throw new BadRequestException('El título del ticket es obligatorio');
       }
 
-      if (!ticketState)
-        throw new NotFoundException(
-          'No se encontró el estado inicial del ticket',
-        );
+      const manager = queryRunner.manager;
 
-      if (!createTicketDto.ticketTitleId)
-        throw new BadRequestException('El título del ticket es obligatorio');
+      const [firstState, initialState, lastState] = await Promise.all([
+        this.ticketStateService.findFirstTicketState(manager),
+        this.ticketStateService.findInitialPreapprovalTicketState(manager),
+        this.ticketStateService.findLastTicketState(manager),
+      ]);
 
-      const branchId =
-        user.role.isAdmin || user.role.isConfigurator
-          ? createTicketDto.branchId
-          : user.branchId;
+      if (!firstState) {
+        throw new NotFoundException('No se encontró el estado inicial del ticket');
+      }
 
-      if (!branchId)
+      const hasPreapprovalInCategory = await this.ticketTitleService.hasPreapprovalInCategory(
+        createTicketDto.ticketTitleId,
+        manager,
+      );
+
+      const branchId = user.role.isAdmin || user.role.isConfigurator
+        ? createTicketDto.branchId
+        : user.branchId;
+
+      if (!branchId) {
         throw new BadRequestException('El ticket no tiene sucursal asignada');
+      }
 
+      // AGENTE ASIGNADO
+      let selectedAgent: User | null = null;
+
+      if (hasPreapprovalInCategory) {
+        selectedAgent = await this.userService.findDesignatedApproverAgent(branchId, manager);
+      } else {
+        selectedAgent = await this.agentAssigned(branchId, lastState.id, manager);
+      }
+
+      // CREACIÓN DEL TICKET
       const {
         formResponse: formResponseData,
         assignedUsers,
         ...ticketBaseData
       } = createTicketDto;
 
-      const ticketData = {
+      const ticket = this.ticketRepository.create({
         ...ticketBaseData,
         userId: user.id,
-        branchId: branchId,
-        ticketStateId: ticketState.id,
-      };
+        branchId,
+        ticketStateId: hasPreapprovalInCategory ? initialState.id : firstState.id,
+      });
 
-      const newTicket = this.ticketRepository.create(ticketData);
+      const savedTicket = await manager.save(ticket);
 
-      const savedTicket = await queryRunner.manager.save(newTicket);
-
+      // RESPUESTA DE FORMULARIO
       if (
         formResponseData &&
         formResponseData.formId?.trim() &&
@@ -134,11 +125,10 @@ export class TicketService {
       ) {
         const formResponse = this.formResponseRepository.create({
           ...formResponseData,
-
           ticketId: savedTicket.id,
         });
 
-        await queryRunner.manager.save(formResponse);
+        await manager.save(formResponse);
 
         if (files?.length > 0) {
           for (const file of files) {
@@ -149,14 +139,15 @@ export class TicketService {
               originalName: file.originalname,
             });
 
-            await queryRunner.manager.save(fileEntity);
+            await manager.save(fileEntity);
           }
         }
 
         savedTicket.formResponse = formResponse;
-        await queryRunner.manager.save(Ticket, savedTicket);
+        await manager.save(Ticket, savedTicket); 
       }
 
+      // ASIGNACIÓN DE AGENTE
       const assignedUserId = user.role.isAgent ? user.id : selectedAgent?.id;
 
       if (assignedUserId) {
@@ -164,20 +155,21 @@ export class TicketService {
           userId: assignedUserId,
           ticketId: savedTicket.id,
         });
-
-        await queryRunner.manager.save(assigned);
+        await manager.save(assigned);
       }
 
+      // CONFIRMAR TRANSACCIÓN
       await queryRunner.commitTransaction();
 
+      // FUERA DE LA TRANSACCIÓN
       const resultData = await this.findOne(savedTicket.id);
-
       let emailStatus = 'Ticket creado exitosamente';
+      const emailErrors: string[] = [];
 
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
-          ticketState: ticketState.description,
+          ticketState: hasPreapprovalInCategory ? initialState.description :firstState.description,
           prefix: resultData.ticketTitle.ticketCategory.prefix,
           ticketId: resultData.id,
           ticketNumber: resultData.ticketNumber,
@@ -187,45 +179,73 @@ export class TicketService {
           ticketCreatedAt: resultData.createdAt,
         };
 
-        await this.emailService.sendEmail(
-          user.email,
-          `${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-          'email-template-open.html',
-          emailData,
-        );
+        const templace_email = hasPreapprovalInCategory ? 'email-template-pending.html' : 'email-template-open.html';
 
-        if (selectedAgent?.email) {
-          const company = await this.userService.findById(user.companyId);
-
-          emailData['fullname'] =
-            selectedAgent?.name + ' ' + selectedAgent?.lastname;
-
+        // Envío al usuario
+        try {
           await this.emailService.sendEmail(
-            `${selectedAgent?.email},${company.email}`,
-            `Asignacion ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            'email-template-assigned.html',
+            user.email,
+            `${emailData.prefix}-${resultData.ticketNumber}`,
+            templace_email,
             emailData,
           );
+        } catch (userEmailError) {
+          console.error('Error al enviar correo al usuario:', userEmailError);
+          emailErrors.push(`Usuario (${user.email}): ${userEmailError.message}`);
         }
 
-        if (!selectedAgent?.email && user.companyId) {
-          const company = await this.userService.findById(user.companyId);
+        const company = user.companyId
+          ? await this.userService.findCompanyById(user.companyId)
+          : null;
 
-          if (company.email) {
+        
+        try {
+          if (selectedAgent?.email) {
+            emailData.fullname = `${selectedAgent.name} ${selectedAgent.lastname}`;
+            const recipients = `${selectedAgent.email}${company?.email ? ',' + company.email : ''}`;
+
+            await this.emailService.sendEmail(
+              recipients,
+              `Asignación ${emailData.prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned.html',
+              emailData,
+            );
+          } 
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Agente: ${agentEmailError.message}`);
+        }
+
+        try {
+          if (company?.email) {
             await this.emailService.sendEmail(
               company.email,
-              `Asignacion ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+              `Asignación ${emailData.prefix}-${resultData.ticketNumber}`,
               'email-template-assigned.html',
               emailData,
             );
           }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Empresa: ${agentEmailError.message}`);
         }
+
+        if (emailErrors.length > 0) {
+          emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
+
       } catch (emailError) {
-        emailStatus =
-          'El ticket se creó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.';
+        console.error("Error general en bloque de envío de correos:", emailError);
+        if (emailErrors.length > 0) {
+           emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
       }
 
-      await this.cacheManager.delCache(`tickets:*`);
+      await this.cacheManager.delCache('tickets:*');
 
       return {
         data: resultData,
@@ -234,17 +254,12 @@ export class TicketService {
     } catch (error) {
       await queryRunner.rollbackTransaction();
 
-      if (
-        error instanceof BadRequestException ||
-        error instanceof NotFoundException
-      ) {
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
         throw error;
       }
 
       throw new InternalServerErrorException(
-        `Se produjo un error al crear el ticket: ${
-          error?.message || 'Unexpected error'
-        }`,
+        `Se produjo un error al crear el ticket: ${error?.message || 'Error inesperado'}`,
       );
     } finally {
       await queryRunner.release();
@@ -288,27 +303,39 @@ export class TicketService {
         .leftJoinAndSelect('user.company', 'company')
         .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
         .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
-        .leftJoinAndSelect(
-          'ticket.assignedUsers',
-          'assignedUsers',
-          'assignedUsers.state = true',
-        )
-        .leftJoinAndSelect('assignedUsers.user', 'agent');
+
+        if (user.isDesignatedApprover) {
+          queryBuilder .leftJoinAndSelect('ticket.assignedUsers', 'assignedUsers')       
+        }else{
+          queryBuilder .leftJoinAndSelect('ticket.assignedUsers', 'assignedUsers', 'assignedUsers.state = true')
+        }
+        queryBuilder.leftJoinAndSelect('assignedUsers.user', 'agent')
+       
 
       // Filtro por rol
       if (!isConfigurator) {
         if (isClient) {
-          queryBuilder.andWhere('ticket.userId = :userId', { userId: user.id });
+          queryBuilder.andWhere(
+            'ticket.userId = :userId',
+            { userId: user.id },
+          );
         }
         if (isAgent) {
-          queryBuilder.andWhere('assignedUsers.userId = :agentId', {
-            agentId: user.id,
-          });
+          queryBuilder.andWhere(
+              'assignedUsers.userId = :agentId',
+              {
+                agentId: user.id,
+              },
+            );
+          
         }
         if (isAdmin) {
-          queryBuilder.andWhere('user.companyId = :userId', {
-            userId: user.id,
-          });
+          queryBuilder.andWhere(
+            'user.companyId = :userId',
+            {
+              userId: user.id,
+            },
+          );
         }
       }
 
@@ -456,6 +483,198 @@ export class TicketService {
     }
   }
 
+  async findAgentApprover(id: string): Promise<Ticket> {
+    try {
+      const cacheKey = `ticket:Agent-Approver-${id}`;
+      let ticket = await this.cacheManager.getCache<Ticket>(cacheKey);
+
+      if (!ticket) {
+        const queryBuilder = this.ticketRepository
+          .createQueryBuilder('ticket')
+          .leftJoinAndSelect(
+            'ticket.assignedUsers',
+            'assignedUsers',
+            'assignedUsers.state = false',
+          )
+          .leftJoinAndSelect('assignedUsers.user', 'agent', 'agent.isDesignatedApprover = true')
+          .where('ticket.id = :id', { id });
+
+        ticket = await queryBuilder.getOne();
+
+        if (!ticket) {
+          throw new NotFoundException(`Ticket con ID '${id}' no encontrado.`);
+        }
+
+        await this.cacheManager.setCache(cacheKey, ticket);
+      }
+
+      return ticket;
+    } catch (error) {
+      console.error('Error en findOne:', error);
+      throw new InternalServerErrorException('No se pudo obtener el ticket.');
+    }
+  }
+
+  async updateStatusToOpen(
+    userSession: userSession,
+    ids: string[],
+    description: string,
+  ): Promise<{ data: Ticket[]; message: string }> {
+    const queryRunner = this.ticketRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    const updatedTickets: Ticket[] = [];
+    const manager = queryRunner.manager;
+    const emailErrors: { ticketId: string; email:string, error: any }[] = [];
+
+    try {
+      const ticketFirstState = await this.ticketStateService.findFirstTicketState(manager);
+      if (!ticketFirstState) {
+        throw new NotFoundException(`Error al encontrar el primer estado.`);
+      }
+      const lastState = await this.ticketStateService.findLastTicketState(manager);
+      if (!lastState) {
+        throw new NotFoundException(`Error al encontrar el ultimo estado.`);
+      }
+
+      for (const id of ids) {
+        const note = manager.create(NoteAgentTicket, {
+          description,
+          userId: userSession.id,
+          ticketId: id,
+        });
+        await manager.save(note);
+
+        const ticket = await manager.preload(Ticket, {
+          id,
+          ticketStateId: ticketFirstState.id,
+        });
+
+        if (!ticket) {
+          throw new NotFoundException(`No se encontró el ticket con ID '${id}'.`);
+        }
+
+        const updatedTicket = await manager.save(ticket);
+        updatedTickets.push(updatedTicket);
+
+        const existingAssignment = await manager.findOne(AssignedUserTicket, {
+          where: {
+            userId: userSession.id,
+            ticketId: id,
+          },
+        });
+
+        if (existingAssignment) {
+          existingAssignment.state = false;
+          await manager.save(existingAssignment);
+        }
+        const selectedAgent = await this.agentAssigned(updatedTicket.branchId, lastState.id, manager);
+        const assignedUserId = selectedAgent?.id;
+        if (assignedUserId) {
+          const assigned =manager.create(AssignedUserTicket, {
+            userId: assignedUserId,
+            ticketId: updatedTicket.id,
+          });
+          await manager.save(assigned);
+        }
+         
+      }
+      await queryRunner.commitTransaction();
+
+      // Notificación por correo y limpieza de caché después de la transacción
+      for (const ticket of updatedTickets) {
+        const resultData = await this.findOne(ticket.id);
+        const user = await this.userService.findById(resultData.userId);
+        if (!user) continue;
+
+        const prefix = resultData.ticketTitle.ticketCategory.prefix;
+        const priority = resultData.ticketTitle.ticketPriority.title;
+
+        const emailData = {
+          fullname: `${user.name} ${user.lastname}` || 'User',
+          ticketState: resultData.ticketState.description,
+          prefix,
+          ticketId: resultData.id,
+          userId: user.id,
+          ticketNumber: resultData.ticketNumber,
+          ticketTitle: resultData.ticketTitle.description,
+          ticketPriority: priority,
+          ticketCreatedAt: resultData.createdAt,
+        };
+
+        try {
+          await this.emailService.sendEmail(
+            user.email,
+            `Actualización ${prefix}-${resultData.ticketNumber}`,
+            'email-template-open.html',
+            emailData,
+            true,
+          );
+
+          const lastState = await this.ticketStateService.findLastTicketState(manager);
+          const selectedAgent = await this.agentAssigned(ticket.branchId, lastState.id, manager);   
+
+          if (selectedAgent?.email) {
+            const company = await this.userService.findCompanyById(user.companyId);
+            emailData.fullname = `${selectedAgent.name} ${selectedAgent.lastname}`;
+
+            await this.emailService.sendEmail(
+              `${selectedAgent.email}${company?.email ? ',' + company.email : ''}`,
+              `Apertura ticket ${prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned.html',
+              emailData,
+            );
+          }
+        } catch (emailError) {
+          console.error('Error enviando email para ticket:', ticket.id, emailError);
+          emailErrors.push({ ticketId: ticket.id, email:user.email, error: emailError });
+        }
+
+        await this.cacheManager.delCache(`ticket:${ticket.id}`);
+      }
+
+      await this.cacheManager.delCache('tickets:*');
+      await this.cacheManager.delCache('notes:*');
+
+      let message = 'Tickets abiertos correctamente.';
+
+      if (emailErrors.length === ids.length) {
+        message += ' Sin embargo, **ningún correo fue enviado exitosamente**.';
+      } else if (emailErrors.length > 0) {
+        message += ` Algunos correos **fallaron** (${emailErrors.length}/${ids.length}).`;
+      }
+
+      // Detallar errores si los hay
+      if (emailErrors.length > 0) {
+        const errorDetails = emailErrors
+          .map(
+            (error) =>
+              `\n- Ticket ID: ${error.ticketId}, Correo: ${error.email}, Motivo: ${error.error.message}` 
+          )
+          .join('');
+        message += '\n\n**Errores de envío:**' + errorDetails;
+      }
+
+      return {
+        data: updatedTickets,
+        message,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      console.error('Error in updateStatusToOpen:', error);
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        `Se produjo un error al crear el ticket: ${error?.message || 'Error inesperado'}`,
+      );
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async updateStatusToInProcess(
     id: string,
   ): Promise<{ data: Ticket; message: string }> {
@@ -463,7 +682,7 @@ export class TicketService {
       // Find the state with order 3
       const ticketState = await this.ticketStateService.findByOrder(2);
       if (!ticketState) {
-        throw new NotFoundException(`State with order '2' not found.`);
+        throw new NotFoundException(`Estado con orden '2' no encontrado.`);
       }
 
       // Preload to update
@@ -473,21 +692,24 @@ export class TicketService {
       });
 
       if (!ticket) {
-        throw new NotFoundException(`Ticket with ID '${id}' not found.`);
+        throw new NotFoundException(`No se encontró el ticket con ID '${id}'.`);
       }
 
       const updatedTicket = await this.ticketRepository.save(ticket);
 
       const user = await this.userService.findById(updatedTicket.userId);
       if (!user) {
-        throw new NotFoundException(`Error finding ticket user.`);
+        throw new NotFoundException(
+          `Error al encontrar el usuario del ticket.`,
+        );
       }
 
       const resultData = await this.findOne(updatedTicket.id);
-      let emailStatus = 'Ticket pass to In Process successfully';
+      let emailStatus = 'El ticket fue pasado a EN PROCESO exitosamente';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
-
+      const emailErrors: string[] = [];
+      const agent = await this.userService.findById(updatedTicket.assignedUsers[0].userId);
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
@@ -499,30 +721,85 @@ export class TicketService {
           ticketPriority: priority,
           ticketCreatedAt: resultData.createdAt,
         };
-
-        await this.emailService.sendEmail(
-          user.email,
-          `Devuelta ${prefix}-${updatedTicket.ticketNumber}`,
-          'email-template.html',
-          emailData,
-        );
-        if (ticket.user) {
-          const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId,
-          );
-          const company = await this.userService.findById(user.companyId);
-          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+        try {
           await this.emailService.sendEmail(
-            `${agent.email},${company.email}`,
-            `Modificacion tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            'email-template-assigned-modify.html',
+            user.email,
+            `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
+            'email-template.html',
             emailData,
           );
+        } catch (userEmailError) {
+          console.error('Error al enviar correo al usuario:', userEmailError);
+          emailErrors.push(`Usuario (${user.email}): ${userEmailError.message}`);
         }
+        
+        try {
+          const agentApprover = await this.findAgentApprover(updatedTicket.id);
+          if (agentApprover) {
+            const name = agentApprover.assignedUsers[0].user.name
+            const lastname = agentApprover.assignedUsers[0].user.lastname;
+            const email = agentApprover.assignedUsers[0].user.email;
+            emailData['fullname'] = name + ' ' + lastname;
+            if (email) {
+              await this.emailService.sendEmail(
+                email,
+                `Modificación tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Agente Aprobador: ${agentEmailError.message}`);
+        }
+
+        try {
+          if (agent) {
+             emailData['fullname'] = agent.name + ' ' + agent.lastname;
+           
+            if (agent.email) {
+              await this.emailService.sendEmail(
+                agent.email,
+                `Modificación tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Agente Asignado: ${agentEmailError.message}`);
+        }
+
+        try {
+          const company = await this.userService.findCompanyById(
+            user.companyId,
+          );
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+          if (company?.email) {
+            await this.emailService.sendEmail(
+              company.email,
+              `Modificación tikect ${emailData.prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned-modify.html',
+              emailData,
+            );
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Empresa: ${agentEmailError.message}`);
+        }
+
+       
       } catch (emailError) {
         console.log(emailError);
-        emailStatus =
-          'Ticket was pass to In Process successfully, but the email notification could not be sent. Please contact Branzon Tech support';
+         if (emailErrors.length > 0) {
+           emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
+        // emailStatus =
+        //   'El ticket fue pasado a EN PROCESO exitosamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico de Branzon.';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -533,7 +810,7 @@ export class TicketService {
     } catch (error) {
       console.error('Error in updateStatusToAssisted:', error);
       throw new InternalServerErrorException(
-        'Failed to update the ticket status.',
+        'No se pudo actualizar el estado del ticket.',
       );
     }
   }
@@ -543,10 +820,9 @@ export class TicketService {
   ): Promise<{ data: Ticket; message: string }> {
     try {
       // Find the state with order 3
-      console.log('entro');
       const ticketState = await this.ticketStateService.findByOrder(3);
       if (!ticketState) {
-        throw new NotFoundException(`State with order '3' not found.`);
+        throw new NotFoundException(`Estado con orden '3' no encontrado.`);
       }
 
       // Preload to update
@@ -556,21 +832,24 @@ export class TicketService {
       });
 
       if (!ticket) {
-        throw new NotFoundException(`Ticket with ID '${id}' not found.`);
+        throw new NotFoundException(`No se encontró el ticket con ID '${id}'.`);
       }
 
       const updatedTicket = await this.ticketRepository.save(ticket);
 
       const user = await this.userService.findById(updatedTicket.userId);
       if (!user) {
-        throw new NotFoundException(`Error finding ticket user.`);
+        throw new NotFoundException(
+          `Error al encontrar el usuario del ticket.`,
+        );
       }
 
       const resultData = await this.findOne(updatedTicket.id);
-      let emailStatus = 'Ticket pass to Assisted successfully';
+      let emailStatus = 'El ticket atendido exitosamente';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
-
+      const emailErrors: string[] = [];
+      const agent = await this.userService.findById(updatedTicket.assignedUsers[0].userId);
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
@@ -582,30 +861,84 @@ export class TicketService {
           ticketPriority: priority,
           ticketCreatedAt: resultData.createdAt,
         };
-
-        await this.emailService.sendEmail(
-          user.email,
-          `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
-          'email-template.html',
-          emailData,
-        );
-        if (ticket.user) {
-          const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId,
-          );
-          const company = await this.userService.findById(user.companyId);
-          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+        
+        try {
           await this.emailService.sendEmail(
-            `${agent.email},${company.email}`,
-            `Modificacion tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            'email-template-assigned-modify.html',
+            user.email,
+            `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
+            'email-template.html',
             emailData,
           );
+        } catch (userEmailError) {
+          console.error('Error al enviar correo al usuario:', userEmailError);
+          emailErrors.push(`Usuario (${user.email}): ${userEmailError.message}`);
+        }
+        
+        try {
+          const agentApprover = await this.findAgentApprover(updatedTicket.id);
+          if (agentApprover) {
+            const name = agentApprover.assignedUsers[0].user.name
+            const lastname = agentApprover.assignedUsers[0].user.lastname;
+            const email = agentApprover.assignedUsers[0].user.email;
+            emailData['fullname'] = name + ' ' + lastname;
+            if (email) {
+              await this.emailService.sendEmail(
+                email,
+                `Modificación tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Agente Aprobador: ${agentEmailError.message}`);
+        }
+
+        try {
+          if (agent) {
+             emailData['fullname'] = agent.name + ' ' + agent.lastname;
+           
+            if (agent.email) {
+              await this.emailService.sendEmail(
+                agent.email,
+                `Modificación tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Agente Asignado: ${agentEmailError.message}`);
+        }
+
+        try {
+          const company = await this.userService.findCompanyById(
+            user.companyId,
+          );
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+          if (company?.email) {
+            await this.emailService.sendEmail(
+              company.email,
+              `Modificación tikect ${emailData.prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned-modify.html',
+              emailData,
+            );
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Empresa: ${agentEmailError.message}`);
         }
       } catch (emailError) {
         console.log(emailError);
-        emailStatus =
-          'Ticket was pass to Assisted successfully, but the email notification could not be sent. Please contact Branzon Tech support';
+        if (emailErrors.length > 0) {
+           emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
+        // emailStatus =
+        //   'El ticket fue pasado a ATENDIDO exitosamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico de Branzon.';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -616,7 +949,7 @@ export class TicketService {
     } catch (error) {
       console.error('Error in updateStatusToAssisted:', error);
       throw new InternalServerErrorException(
-        'Failed to update the ticket status.',
+        'No se pudo actualizar el estado del ticket.',
       );
     }
   }
@@ -638,20 +971,23 @@ export class TicketService {
       });
 
       if (!ticket) {
-        throw new NotFoundException(`Ticket with ID '${id}' not found.`);
+        throw new NotFoundException(`No se encontró el ticket con ID '${id}'.`);
       }
 
       const updatedTicket = await this.ticketRepository.save(ticket);
       const user = await this.userService.findById(updatedTicket.userId);
       if (!user) {
-        throw new NotFoundException(`Error finding ticket user.`);
+        throw new NotFoundException(
+          `Error al encontrar el usuario del ticket.`,
+        );
       }
       const resultData = await this.findOne(updatedTicket.id);
 
-      let emailStatus = 'Ticket Closeted successfully';
+      let emailStatus = 'Ticket cerrado con éxito';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
-
+      const emailErrors: string[] = [];
+      const agent = await this.userService.findById(updatedTicket.assignedUsers[0].userId);
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
@@ -665,30 +1001,84 @@ export class TicketService {
           ticketCreatedAt: resultData.createdAt,
         };
 
-        await this.emailService.sendEmail(
-          user.email,
-          `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
-          'email-template-closet.html',
-          emailData,
-          true,
-        );
-        if (ticket.user) {
-          const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId,
-          );
-          const company = await this.userService.findById(user.companyId);
-          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+        try {
           await this.emailService.sendEmail(
-            `${agent.email},${company.email}`,
-            `Cierre tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            'email-template-assigned-closet.html',
+            user.email,
+            `Cierre tikect ${prefix}-${updatedTicket.ticketNumber}`,
+            'email-template-closet.html',
             emailData,
           );
+        } catch (userEmailError) {
+          console.error('Error al enviar correo al usuario:', userEmailError);
+          emailErrors.push(`Usuario (${user.email}): ${userEmailError.message}`);
         }
+        
+        try {
+          const agentApprover = await this.findAgentApprover(updatedTicket.id);
+          if (agentApprover) {
+            const name = agentApprover.assignedUsers[0].user.name
+            const lastname = agentApprover.assignedUsers[0].user.lastname;
+            const email = agentApprover.assignedUsers[0].user.email;
+            emailData['fullname'] = name + ' ' + lastname;
+            if (email) {
+              await this.emailService.sendEmail(
+                email,
+                `Cierre tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Agente Aprobador: ${agentEmailError.message}`);
+        }
+
+        try {
+          if (agent) {
+             emailData['fullname'] = agent.name + ' ' + agent.lastname;
+           
+            if (agent.email) {
+              await this.emailService.sendEmail(
+                agent.email,
+                `Cierre tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Agente Asignado: ${agentEmailError.message}`);
+        }
+
+        try {
+          const company = await this.userService.findCompanyById(
+            user.companyId,
+          );
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+          if (company?.email) {
+            await this.emailService.sendEmail(
+              company.email,
+              `Cierre tikect ${emailData.prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned-modify.html',
+              emailData,
+            );
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          emailErrors.push(`Empresa: ${agentEmailError.message}`);
+        }
+        
       } catch (emailError) {
         console.log(emailError);
-        emailStatus =
-          'Ticket was pass to Closeted successfully, but the email notification could not be sent. Please contact Branzon Tech support';
+        if (emailErrors.length > 0) {
+           emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
+        // emailStatus =
+        //   'El ticket fue pasado a CERRADO exitosamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico de Branzon.';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -700,10 +1090,149 @@ export class TicketService {
     } catch (error) {
       console.error('Error in updateStatusToCloseted:', error);
       throw new InternalServerErrorException(
-        'Failed to update the ticket status.',
+        'No se pudo actualizar el estado del ticket.',
       );
     }
   }
+
+
+  async updateStatusToRejected(
+    userSession: userSession,
+    ids: string[],
+    description: string
+  ): Promise<{ data: Ticket[]; message: string }> {
+    const queryRunner = this.ticketRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    const updatedTickets: Ticket[] = [];
+    const manager = queryRunner.manager;
+    const emailErrors: { ticketId: string; email: string; error: any }[] = [];
+
+    try {
+      const rejectedState = await this.ticketStateService.findRejectedPreapprovalTicketState(manager);
+      if (!rejectedState) {
+        throw new NotFoundException('Estado "Rechazado" no configurado en el sistema');
+      }
+
+      for (const id of ids) {
+        const note = manager.create(NoteAgentTicket, {
+          description,
+          userId: userSession.id,
+          ticketId: id,
+        });
+        await manager.save(note);
+
+        const ticket = await manager.preload(Ticket, {
+          id,
+          ticketStateId: rejectedState.id,
+        });
+
+        if (!ticket) {
+          throw new NotFoundException(`No se encontró el ticket con ID '${id}'`);
+        }
+
+        const updatedTicket = await manager.save(ticket);
+        updatedTickets.push(updatedTicket);
+        const existingAssignment = await manager.findOne(AssignedUserTicket, {
+          where: {
+            userId: userSession.id,
+            ticketId: id,
+          },
+        });
+
+        if (existingAssignment) {
+          existingAssignment.state = false;
+          await manager.save(existingAssignment);
+        }
+      }
+
+      await queryRunner.commitTransaction();
+
+      // Enviar correos y limpiar caché
+      for (const ticket of updatedTickets) {
+        const resultData = await this.findOne(ticket.id);
+        const user = await this.userService.findById(resultData.userId);
+        if (!user) continue;
+
+        const prefix = resultData.ticketTitle.ticketCategory.prefix;
+        const priority = resultData.ticketTitle.ticketPriority.title;
+
+        const emailData = {
+          fullname: `${user.name} ${user.lastname}` || 'User',
+          ticketState: resultData.ticketState.description,
+          prefix,
+          ticketId: resultData.id,
+          userId: user.id,
+          noteAgentTicket:description,
+          ticketNumber: resultData.ticketNumber,
+          ticketTitle: resultData.ticketTitle.description,
+          ticketPriority: priority,
+          ticketCreatedAt: resultData.createdAt,
+        };
+
+        try {
+          await this.emailService.sendEmail(
+            user.email,
+            `Ticket Rechazado ${prefix}-${resultData.ticketNumber}`,
+            'email-template-rejected.html',
+            emailData,
+            true,
+          );
+        } catch (emailError) {
+          console.error('Error enviando email para ticket:', ticket.id, emailError);
+          emailErrors.push({
+            ticketId: ticket.id,
+            email: user.email,
+            error: emailError,
+          });
+        }
+
+        await this.cacheManager.delCache(`ticket:${ticket.id}`);
+      }
+
+      await this.cacheManager.delCache('tickets:*');
+      await this.cacheManager.delCache('notes:*');
+
+      // Construir mensaje
+      let message = 'Tickets rechazados correctamente.';
+
+      if (emailErrors.length === ids.length) {
+        message += ' Sin embargo, **ningún correo fue enviado exitosamente**.';
+      } else if (emailErrors.length > 0) {
+        message += ` Algunos correos **fallaron** (${emailErrors.length}/${ids.length}).`;
+      }
+
+      if (emailErrors.length > 0) {
+        const errorDetails = emailErrors
+          .map(
+            (error) =>
+              `\n- Ticket ID: ${error.ticketId}, Correo: ${error.email}, Motivo: ${error.error.message || 'Error desconocido'}`
+          )
+          .join('');
+        message += '\n\n**Errores de envío:**' + errorDetails;
+      }
+
+      return {
+        data: updatedTickets,
+        message,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+
+      console.error('Error en updateStatusToRejected:', error);
+      throw new InternalServerErrorException(
+        `Error al rechazar los tickets: ${error.message}`,
+      );
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
 
   async update(id: string, updateTicketDto: UpdateTicketDto): Promise<Ticket> {
     try {
@@ -747,6 +1276,39 @@ export class TicketService {
       console.error('Error en remove:', error);
       throw new InternalServerErrorException('No se pudo eliminar el ticket.');
     }
+  }
+
+  private async agentAssigned(
+    branchId: string,
+    lastStateId: string,
+    manager: EntityManager,
+  ): Promise<User | null> {
+    let selectedAgent: User | null = null;
+    const defaultAgents = await this.userService.findDefaultAgents(branchId, manager);
+    for (const agent of defaultAgents) {
+      if (!agent.limite_ticket || agent.limite_ticket === 0) {
+        selectedAgent = agent;
+        break;
+      }
+
+      const assignedCount = await manager
+        .getRepository(AssignedUserTicket)
+        .createQueryBuilder('assigned')
+        .innerJoin('assigned.ticket', 'ticket')
+        .innerJoin('ticket.ticketState', 'state')
+        .where('assigned.userId = :userId', { userId: agent.id })
+        .andWhere('assigned.state = true')
+        .andWhere('state.id != :cerradoStateId', {
+          cerradoStateId: lastStateId,
+        })
+        .getCount();
+ 
+      if (assignedCount < agent.limite_ticket) {
+        selectedAgent = agent;
+        break;
+      }
+    }
+    return selectedAgent;
   }
 
   async getDashboardCards(
@@ -927,14 +1489,15 @@ export class TicketService {
       query
         .leftJoin(
           'ticket.assignedUsers',
-          'assignedUsers',
-          'assignedUsers.state = true',
+          'assignedUsers'
         )
         .andWhere('assignedUsers.userId = :agentId', {
           agentId: user.id,
         });
+      if (!user.isDesignatedApprover) query.andWhere('assignedUsers.state = true');
     }
   }
+  
   async getTicketsByCategoryStats(
     user: userSession,
     startDate: string,

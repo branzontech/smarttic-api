@@ -12,6 +12,9 @@ export class TicketCategory {
   @Column({ unique: true })
   prefix: string;
 
+  @Column({ type: 'boolean', default: false })
+  preapproval: boolean; 
+
   @Column({ name: 'state', default: true })
   state: boolean;
 

@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Not, Repository } from 'typeorm';
+import { EntityManager, IsNull, Not, Repository } from 'typeorm';
 import { CreateUserDto } from 'src/modules/users/dto/create-user.dto';
 import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
 import { User } from 'src/modules/users/entities/user.entity';
@@ -62,21 +62,25 @@ export class UsersService {
         );
       if (existEmail)
         throw new BadRequestException(
-          `El usuario con el email ${email} El usuario cone`,
+          `El usuario con el email ${email} ya existe`,
         );
       if (!roleExists)
-        throw new NotFoundException(`Role with id ${roleId} not found`);
+        throw new NotFoundException(`No se encontró el rol con id ${roleId}`);
 
-      // Validación mutuamente excluyente
+      if (!roleExists.isAgent && user.limite_ticket && user.limite_ticket > 0)
+        throw new NotFoundException(
+          `Este usuario no puede tener un límite de tickets si no es un agente.`,
+        );
+
       if (branchId && branches.length > 0) {
         throw new BadRequestException(
-          'Cannot specify both branchId and branches[]',
+          'No se pueden especificar tanto branchId como ramas[]',
         );
       }
 
       // Validación de branches
       const branchIdsToCheck = branchId ? [branchId] : branches;
-      const uniqueBranchIds = [...new Set(branchIdsToCheck)]; // Eliminar duplicados
+      const uniqueBranchIds = [...new Set(branchIdsToCheck)];
 
       if (uniqueBranchIds.length > 0) {
         const branchesExist = await Promise.all(
@@ -88,7 +92,7 @@ export class UsersService {
         );
         if (invalidBranches.length > 0) {
           throw new BadRequestException(
-            `Invalid branch IDs: ${invalidBranches.join(', ')}`,
+            `ID de sucursal no válidos: ${invalidBranches.join(', ')}`,
           );
         }
       }
@@ -100,12 +104,11 @@ export class UsersService {
         ...userData,
         limite_ticket: limite_ticket,
         password: hashedPassword,
-        branchId: branches.length > 0 ? null : branchId, // Asegurar null si usa branches
+        branchId: branches.length > 0 ? null : branchId,
       });
 
       const savedUser = await queryRunner.manager.save(newUser);
 
-      // Asignar branches usando el mismo queryRunner
       if (branches.length > 0) {
         await Promise.all(
           branches.map((branchId) =>
@@ -226,16 +229,13 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException(`User with id ${id} not found`);
     delete (user as User).password;
-    (user as any).branches = user.assignedBranches.map(
-      (branch) => branch.branchId,
-    );
-
     await this.cacheManager.setCache(cacheKey, user, CACHE_TTL);
     return user;
   }
 
-  async findDefaultAgents(branchId?: string): Promise<User[]> {
-    return this.userRepository.find({
+  async findDefaultAgents(branchId?: string, manager?: EntityManager): Promise<User[]> {
+    const repo = manager ? manager.getRepository(User) : this.userRepository;
+    return repo.find({
       where: [
         {
           branchId: branchId,
@@ -254,6 +254,7 @@ export class UsersService {
     });
   }
 
+
   async findAllAgent(branchId?: string): Promise<{ data: User[] }> {
     const cacheKey = `user:AllAgent`;
     const cachedUser = await this.cacheManager.getCache<{ data: User[] }>(
@@ -265,17 +266,20 @@ export class UsersService {
       ? [
           {
             state: true,
+            isDesignatedApprover: false,
             branchId: branchId,
             role: { isAgent: true },
           },
           {
             state: true,
+            isDesignatedApprover: false,
             branchId: IsNull(),
             role: { isAgent: true },
           },
         ]
       : {
           state: true,
+          isDesignatedApprover: false,
           role: { isAgent: true },
         };
 
@@ -285,10 +289,6 @@ export class UsersService {
     });
 
     if (!user) throw new NotFoundException(`Agentes no encontrados`);
-
-    // await this.cacheManager.setCache(cacheKey, user, CACHE_TTL);
-    // return { data: user };
-    // Search id of ticketstates "Abierto"
 
     const lastState = await this.ticketStateService.findLastTicketState();
 
@@ -323,6 +323,43 @@ export class UsersService {
     await this.cacheManager.setCache(cacheKey, user, CACHE_TTL);
 
     return { data: resultWithTickets };
+  }
+
+  async findDesignatedApproverAgent(branchId?: string, manager?: EntityManager): Promise<User> {
+    try {
+      const repo = manager ? manager.getRepository(User) : this.userRepository;
+      const query = repo
+        .createQueryBuilder('user')
+        .innerJoinAndSelect('user.role', 'role')
+        .where('user.state = :state', { state: true })
+        .andWhere('role.isAgent = true')
+        .andWhere('user.isDesignatedApprover = true');
+
+      if (branchId) {
+        query.andWhere('(user.branchId = :branchId OR user.branchId IS NULL)', {
+          branchId,
+        });
+      }
+
+      // Prioriza los que tienen isAgentDefault = true
+      query.orderBy('user.isAgentDefault', 'DESC');
+
+      // Solo uno
+      const agent = await query.getOne();
+
+      if (!agent) {
+        throw new NotFoundException(
+          'No se encontró un agente aprobador designado.',
+        );
+      }
+
+      return agent;
+    } catch (error) {
+      console.error('Error al obtener agente designado:', error);
+      throw new InternalServerErrorException(
+        'No se pudo obtener el agente designado.',
+      );
+    }
   }
 
   async findByEmail(email: string): Promise<User> {
@@ -379,18 +416,45 @@ export class UsersService {
         where: { id },
       });
       if (!existingUser)
-        throw new NotFoundException(`User with id ${id} not found`);
+        throw new NotFoundException(`No se encontró el usuario con id ${id}`);
 
-      const { password, branchId, branches = [], ...restUserData } = user;
+      const {
+        username,
+        email,
+        password,
+        branchId,
+        branches = [],
+        ...restUserData
+      } = user;
 
-      // Validación mutuamente excluyente
+      if (email) {
+        const userWithEmail = await this.userRepository.findOne({
+          where: { email },
+        });
+        if (userWithEmail && userWithEmail.id !== id) {
+          throw new BadRequestException(
+            'El correo electrónico ya está registrado por otro usuario.',
+          );
+        }
+      }
+
+      if (username) {
+        const userWithUsername = await this.userRepository.findOne({
+          where: { username },
+        });
+        if (userWithUsername && userWithUsername.id !== id) {
+          throw new BadRequestException(
+            'El nombre de usuario ya está registrado por otro usuario.',
+          );
+        }
+      }
+
       if (branchId && branches.length > 0) {
         throw new BadRequestException(
-          'Cannot specify both branchId and branches[]',
+          'No se pueden especificar tanto branchId como sucursales[]',
         );
       }
 
-      // Validar nuevas branches si se pasan
       const branchIdsToCheck = branchId ? [branchId] : branches;
       const uniqueBranchIds = [...new Set(branchIdsToCheck)];
 
@@ -404,12 +468,33 @@ export class UsersService {
         );
         if (invalidBranches.length > 0) {
           throw new BadRequestException(
-            `Invalid branch IDs: ${invalidBranches.join(', ')}`,
+            `ID de sucursal no válidos: ${invalidBranches.join(', ')}`,
           );
         }
       }
 
-      // Filtrar campos no nulos (como hicimos antes)
+      if (user.roleId) {
+        const roleExists = await this.roleRepository.findOne({
+          where: { id: user.roleId },
+        });
+
+        if (!roleExists) {
+          throw new NotFoundException(
+            `No se encontró el rol con id ${user.roleId}`,
+          );
+        }
+
+        if (
+          !roleExists.isAgent &&
+          user.limite_ticket &&
+          user.limite_ticket > 0
+        ) {
+          throw new BadRequestException(
+            `Este usuario no puede tener un límite de tickets si no es un agente.`,
+          );
+        }
+      }
+
       const filteredUser = Object.fromEntries(
         Object.entries(restUserData).filter(
           ([_, value]) => value !== null && value !== undefined,
@@ -420,19 +505,15 @@ export class UsersService {
         filteredUser.password = await hash(password, 10);
       }
 
-      // Actualizar datos del usuario
       const updatedUser = await queryRunner.manager.save(User, {
         ...existingUser,
         ...filteredUser,
         branchId: branches.length > 0 ? null : branchId,
       });
 
-      // Actualizar relaciones con branches
       if (branches.length > 0) {
-        // Eliminar las relaciones existentes
         await queryRunner.manager.delete(AssignedUserBranch, { userId: id });
 
-        // Crear nuevas relaciones
         for (const bId of branches) {
           await queryRunner.manager.save(AssignedUserBranch, {
             userId: id,
@@ -458,7 +539,7 @@ export class UsersService {
   async remove(id: string): Promise<void> {
     const existingUser = await this.userRepository.findOne({ where: { id } });
     if (!existingUser)
-      throw new NotFoundException(`User with id ${id} not found`);
+      throw new NotFoundException(`No se encontró el usuario con id ${id}`);
 
     await this.userRepository.softDelete(id);
     await this.cacheManager.delCache(`user:${id}`);

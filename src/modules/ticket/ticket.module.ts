@@ -17,12 +17,13 @@ import { FormResponsesModule } from '../form-responses/form-responses.module';
 import { FormResponse } from '../form-responses/entities/form-response.entity';
 import { FormResponseFilesModule } from '../form-response-files/form-response-files.module';
 import { FormResponseFile } from '../form-response-files/entities/form-response-file.entity';
+import { TicketTitleModule } from '../ticket-title/ticket-title.module';
 
 
 
 @Module({
   imports: [ TypeOrmModule.forFeature([Ticket, TicketTitle, TicketState, FormResponse, FormResponseFile]), FormResponseFilesModule,
-  UsersModule, CacheManagerModule, TicketStateModule, AssignedUserTicketModule, BranchModule, FormResponsesModule,
+  UsersModule, CacheManagerModule, TicketStateModule, TicketTitleModule, AssignedUserTicketModule, BranchModule, FormResponsesModule,
     forwardRef(() => SurveyResponseModule), EmailModule, forwardRef(() => TicketDetailModule) ],
   controllers: [TicketController],
   providers: [TicketService ],

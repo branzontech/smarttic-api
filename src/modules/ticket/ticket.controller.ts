@@ -22,6 +22,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiConsumes,
+  getSchemaPath,
 } from '@nestjs/swagger';
 import { AuthzGuard } from 'src/common/guards/authz/authz.guard';
 import { TicketService } from './ticket.service';
@@ -33,6 +34,8 @@ import { PerformanceResponseDto } from './dto/performnce-response.dto';
 import { multerOptions } from 'src/common/helpers/file-upload.helper';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { ParseJsonPipe } from 'src/common/pipes/parse-json.pipe';
+import { UpdateNoteAgentTicketDto } from '../note-agent-tickets/dto/update-note-agent-ticket.dto';
+import { Ticket } from './entities/ticket.entity';
 
 @ApiTags('Tickets')
 @ApiBearerAuth('access-token')
@@ -119,6 +122,7 @@ export class TicketController {
   ) {
     return await this.ticketService.findAll(user, skip, take, filter, columnFilters, orderBy);
   }
+
   @Get('dashboard/cards')
   @ApiOperation({
     summary: 'Get dashboard statistics cards',
@@ -362,6 +366,83 @@ export class TicketController {
     return await this.ticketService.findOne(id);
   }
 
+  @Patch('approved')
+  @ApiOperation({
+    summary: 'Actualizar estado de múltiples tickets a Abierto',
+    description: `
+      Actualiza el estado de uno o más tickets a "Abierto" y realiza las siguientes acciones:
+      1. Cambia el estado del ticket al estado inicial definido en el sistema
+      2. Crea una nota asociada al ticket con la descripción proporcionada
+      3. Reasigna el ticket al agente actual si es necesario
+      4. Envía notificaciones por correo al creador del ticket y al agente asignado
+    `,
+  })
+  @ApiBody({
+    description: 'IDs de los tickets a actualizar y la descripción de la nota',
+    schema: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          items: { type: 'string', format: 'uuid' },
+          example: [
+            '123e4567-e89b-12d3-a456-426614174000',
+            '123e4567-e89b-12d3-a456-426614174001',
+          ],
+        },
+        description: {
+          type: 'string',
+          example: 'Reabriendo los tickets para seguimiento adicional',
+        },
+      },
+      required: ['ids', 'description'],
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Tickets actualizados exitosamente',
+    content: {
+      'application/json': {
+        schema: {
+          type: 'object',
+          properties: {
+            data: {
+              type: 'array',
+              items: { $ref: getSchemaPath(Ticket) },
+            },
+            message: {
+              type: 'string',
+              example: 'Tickets abiertos correctamente. Algunas notificaciones por correo pudieron haber fallado.',
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Solicitud inválida',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'No autorizado',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Recurso no encontrado',
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Error interno del servidor',
+  })
+  async updateStatusToOpen(
+    @CurrentUser() user: userSession,
+    @Body() body: { TicketIds: string[]; description: string }
+  ) {
+    return await this.ticketService.updateStatusToOpen(user, body.TicketIds, body.description);
+  }
+
+
   @Patch('inProcess/:id')
   @ApiOperation({ summary: 'Update ticket status to in Process' })
   @ApiParam({
@@ -412,6 +493,138 @@ export class TicketController {
   async updateStatusToCloseted(@Param('id') id: string) {
     return await this.ticketService.updateStatusToCloseted(id);
   }
+
+  @Patch('rejected')
+  @ApiOperation({
+    summary: 'Rechazar uno o más tickets',
+    description: `
+      Cambia el estado de uno o más tickets a "Rechazado", registra una nota con el motivo y notifica al usuario creador de cada ticket. 
+      Si algún correo falla, se informa en el mensaje de respuesta.`,
+  })
+  @ApiBody({
+    description: 'IDs de tickets a rechazar y motivo del rechazo',
+    schema: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          description: 'Lista de IDs (UUIDs) de los tickets a rechazar',
+          items: {
+            type: 'string',
+            format: 'uuid',
+            example: '123e4567-e89b-12d3-a456-426614174000',
+          },
+        },
+        description: {
+          type: 'string',
+          description: 'Motivo detallado del rechazo',
+          example: 'El ticket no cumple con los requisitos establecidos.',
+          minLength: 10,
+          maxLength: 1000,
+        },
+      },
+      required: ['ids', 'description'],
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Tickets rechazados exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        data: {
+          type: 'array',
+          items: { $ref: '#/components/schemas/Ticket' },
+        },
+        message: {
+          type: 'string',
+          examples: {
+            allSuccess: {
+              value: 'Todos los tickets fueron rechazados y notificados correctamente.',
+            },
+            partialFail: {
+              value: 'Algunos tickets fueron rechazados pero algunos correos fallaron (2/5). Ver detalles:\n- Ticket ID: x, Correo: y, Motivo: z',
+            },
+            allFail: {
+              value: 'Los tickets fueron rechazados pero ningún correo fue enviado exitosamente.',
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Solicitud inválida',
+    content: {
+      'application/json': {
+        example: {
+          statusCode: 400,
+          message: 'Debe proporcionar al menos un ID y una descripción válida.',
+          error: 'Bad Request',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'No autorizado - Token inválido o no proporcionado',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Recurso no encontrado',
+    content: {
+      'application/json': {
+        examples: {
+          ticketNotFound: {
+            value: {
+              statusCode: 404,
+              message: 'Uno o más tickets no fueron encontrados',
+              error: 'Not Found',
+            },
+          },
+          stateNotFound: {
+            value: {
+              statusCode: 404,
+              message: 'Estado "Rechazado" no configurado en el sistema',
+              error: 'Not Found',
+            },
+          },
+          userNotFound: {
+            value: {
+              statusCode: 404,
+              message: 'Uno o más usuarios asociados no fueron encontrados',
+              error: 'Not Found',
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Error interno del servidor',
+    content: {
+      'application/json': {
+        example: {
+          statusCode: 500,
+          message: 'Error al procesar el rechazo de los tickets',
+          error: 'Internal Server Error',
+        },
+      },
+    },
+  })
+  async updateStatusToRejected(
+    @CurrentUser() user: userSession,
+    @Body()
+    body: {
+      TicketIds: string[];
+      description: string;
+    },
+  ) {
+    return this.ticketService.updateStatusToRejected(user, body.TicketIds, body.description);
+  }
+
 
   @Patch(':id')
   @ApiOperation({ 
