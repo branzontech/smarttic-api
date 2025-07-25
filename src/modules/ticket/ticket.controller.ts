@@ -267,22 +267,14 @@ export class TicketController {
   @Get('dashboard/satisfactionIndicator')
   @ApiOperation({
     summary: 'Get satisfaction by semester',
-    description: 'Returns satisfaction data organized by semester',
-  })
-  @ApiQuery({
-    name: 'semester',
-    required: false,
-    type: Number,
-    description:
-      '1 for the first semester (Jan-Jun), 2 for the second (Jul-Dec)',
-    example: 1,
+    description: 'Returns satisfaction data',
   })
   @ApiResponse({
     status: 200,
     description: 'Semester satisfaction data obtained',
     schema: {
       example: {
-        title: 'Satisfaction Indicator S1',
+        title: 'Satisfaction Indicator',
         description: 'Evaluation 1st Semester 2023',
         chartData: [80, 40, 85, 50, 89, 20],
         chartLabels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
@@ -339,7 +331,9 @@ export class TicketController {
     @Query('agentCount') agentCount?: number,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
-    @Query('branchIds') branchIds?: string
+    @Query('branchIds') branchIds?: string,
+    @Query('agentSearch') agentSearch?: string,
+    @Query('isAgentDefault') isAgentDefault?: boolean,
   ) {
     const branchIdsArray = branchIds ? branchIds.split(',') : undefined;
 
@@ -347,7 +341,9 @@ export class TicketController {
       agentCount,
       startDate ,
       endDate ,
-      branchIds: branchIdsArray
+      branchIds: branchIdsArray,
+      agentSearch,
+      isAgentDefault
     });
 
     

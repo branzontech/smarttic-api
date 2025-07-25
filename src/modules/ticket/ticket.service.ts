@@ -750,7 +750,7 @@ export class TicketService {
             }
           }
         } catch (agentEmailError) {
-          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          console.error('Error al enviar correo al agente:', agentEmailError);
           emailErrors.push(`Agente Aprobador: ${agentEmailError.message}`);
         }
 
@@ -768,7 +768,7 @@ export class TicketService {
             }
           }
         } catch (agentEmailError) {
-          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          console.error('Error al enviar correo a la empresa:', agentEmailError);
           emailErrors.push(`Agente Asignado: ${agentEmailError.message}`);
         }
 
@@ -786,7 +786,7 @@ export class TicketService {
             );
           }
         } catch (agentEmailError) {
-          console.error('Error al enviar correo al agente o empresa:', agentEmailError);
+          console.error('Error al enviar correo al empresa:', agentEmailError);
           emailErrors.push(`Empresa: ${agentEmailError.message}`);
         }
 
@@ -1663,13 +1663,13 @@ export class TicketService {
           chartLabels: string[];
         };
       }>(cacheKey);
-      if (cached) return cached;
+      // if (cached) return cached;
 
       const rawData = await this.surveyResponseRepository
         .createQueryBuilder('response')
         .select([
-          "DATE_TRUNC('month', response.createdAt) as month",
-          'ROUND(AVG(calification.score), 0) as average_score',
+          "TO_CHAR(DATE_TRUNC('month', response.createdAt), 'YYYY-MM') as month",
+          'AVG(calification.score) as average_score',
         ])
         .innerJoin('response.surveyCalification', 'calification')
         .innerJoin('response.ticket', 'ticket')
@@ -1681,11 +1681,28 @@ export class TicketService {
         .orderBy('month', 'ASC')
         .getRawMany();
 
-      const { chartData, chartLabels } = this.processSatisfactionByRange(
-        rawData,
-        formatedstartDate,
-        formatedEndDate,
+      // Generar todos los meses en el rango
+      const chartData: number[] = [];
+      const chartLabels: string[] = [];
+
+      const start = new Date(formatedstartDate);
+      const end = new Date(formatedEndDate);
+      end.setDate(1); // Asegura que sea el primer día del mes
+      end.setMonth(end.getMonth() + 1); // Incluir mes final
+      
+      const dataMap = new Map(
+        rawData.map((row) => [row.month, Number(row.average_score)]),
       );
+
+      const current = new Date(start);
+      current.setDate(1);
+
+      while (current < end) {
+        const key = current.toISOString().slice(0, 7); // 'YYYY-MM'
+        chartLabels.push(key);
+        chartData.push(dataMap.get(key) ?? 0);
+        current.setMonth(current.getMonth() + 1);
+      }
 
       const result = {
         data: {
@@ -1706,64 +1723,64 @@ export class TicketService {
     }
   }
 
-  private processSatisfactionByRange(
-    rawData: any[],
-    startDate: string,
-    endDate: string,
-  ): {
-    chartData: number[];
-    chartLabels: string[];
-  } {
-    const monthNames = [
-      'Ene',
-      'Feb',
-      'Mar',
-      'Abr',
-      'May',
-      'Jun',
-      'Jul',
-      'Ago',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dic',
-    ];
-    const chartLabels: string[] = [];
-    const chartData: number[] = [];
-    const startDateFormated = new Date(startDate);
-    const endDateFormated = new Date(endDate);
+  // private processSatisfactionByRange(
+  //   rawData: any[],
+  //   startDate: string,
+  //   endDate: string,
+  // ): {
+  //   chartData: number[];
+  //   chartLabels: string[];
+  // } {
+  //   const monthNames = [
+  //     'Ene',
+  //     'Feb',
+  //     'Mar',
+  //     'Abr',
+  //     'May',
+  //     'Jun',
+  //     'Jul',
+  //     'Ago',
+  //     'Sep',
+  //     'Oct',
+  //     'Nov',
+  //     'Dic',
+  //   ];
+  //   const chartLabels: string[] = [];
+  //   const chartData: number[] = [];
+  //   const startDateFormated = new Date(startDate);
+  //   const endDateFormated = new Date(endDate);
 
-    // Normaliza fechas al primer día del mes
-    let current = new Date(
-      startDateFormated.getFullYear(),
-      startDateFormated.getMonth(),
-      1,
-    );
-    const end = new Date(
-      endDateFormated.getFullYear(),
-      endDateFormated.getMonth(),
-      1,
-    );
+  //   // Normaliza fechas al primer día del mes
+  //   let current = new Date(
+  //     startDateFormated.getFullYear(),
+  //     startDateFormated.getMonth(),
+  //     1,
+  //   );
+  //   const end = new Date(
+  //     endDateFormated.getFullYear(),
+  //     endDateFormated.getMonth(),
+  //     1,
+  //   );
 
-    while (current <= end) {
-      const month = current.getMonth();
-      const year = current.getFullYear();
-      const label = `${monthNames[month]} ${year}`;
-      chartLabels.push(label);
+  //   while (current <= end) {
+  //     const month = current.getMonth();
+  //     const year = current.getFullYear();
+  //     const label = `${monthNames[month]} ${year}`;
+  //     chartLabels.push(label);
 
-      // Buscar si hay un dato en rawData para ese mes
-      const row = rawData.find((r) => {
-        const d = new Date(r.month);
-        return d.getMonth() === month && d.getFullYear() === year;
-      });
+  //     // Buscar si hay un dato en rawData para ese mes
+  //     const row = rawData.find((r) => {
+  //       const d = new Date(r.month);
+  //       return d.getMonth() === month && d.getFullYear() === year;
+  //     });
 
-      chartData.push(row ? parseInt(row.average_score) : 0);
+  //     chartData.push(row ? parseInt(row.average_score) : 0);
 
-      current.setMonth(current.getMonth() + 1);
-    }
+  //     current.setMonth(current.getMonth() + 1);
+  //   }
 
-    return { chartData, chartLabels };
-  }
+  //   return { chartData, chartLabels };
+  // }
 
   async getCaseStatusByMonth(
     user: userSession,
@@ -1856,21 +1873,26 @@ export class TicketService {
       startDate?: string;
       endDate?: string;
       branchIds?: string[];
+      agentSearch?: string;
+      isAgentDefault?: boolean | null; // This type is correctly defined as boolean or null
     } = {},
   ): Promise<{
     data: DashboardChartGroupBar;
   }> {
     try {
-      const { agentCount = 4, startDate, endDate, branchIds } = options;
+      const { agentCount = 4, startDate, endDate, branchIds, agentSearch, isAgentDefault } = options;
 
       const startDateFormated = this.formatedstartDate(startDate);
       const endDateFormated = this.formatedEndDate(endDate);
 
+      // --- START: Updated cacheKey to include new filters ---
       const cacheKey = `agent-performance:${
         user.id
       }:${agentCount}:${startDateFormated}:${endDateFormated}:${
         branchIds?.join(',') || 'all'
-      }`;
+      }:${agentSearch || ''}:${isAgentDefault !== undefined && isAgentDefault !== null ? isAgentDefault : 'all'}`;
+      // --- END: Updated cacheKey ---
+
       const cached = await this.cacheManager.getCache<{
         data: DashboardChartGroupBar;
       }>(cacheKey);
@@ -1889,7 +1911,7 @@ export class TicketService {
       );
 
       // 2. Obtener todos los tickets del rango y su información
-      const rawData = await this.ticketRepository
+      const query = this.ticketRepository
         .createQueryBuilder('ticket')
         .innerJoin('ticket.assignedUsers', 'assignment')
         .innerJoin('assignment.user', 'user')
@@ -1901,13 +1923,30 @@ export class TicketService {
           startDate: startDateFormated,
           endDate: endDateFormated,
         })
-        .andWhere('state.id = :lastStateId', { lastStateId: lastState.id })
-        .andWhere(
-          branchIds?.length ? 'ticket.branchId IN (:...branchIds)' : '1=1',
-          {
-            branchIds,
-          },
-        )
+        .andWhere('state.id = :lastStateId', { lastStateId: lastState.id });
+
+      // Apply branchIds filter if provided
+      if (branchIds?.length) {
+        query.andWhere('ticket.branchId IN (:...branchIds)', { branchIds });
+      }
+  
+      // --- START: Apply agentSearch (ILIKE) filter ---
+      if (agentSearch) {
+        query.andWhere(
+          `(CONCAT(user.name, '',  user.lastname) ILIKE :agentSearch)`,
+          { agentSearch: `%${agentSearch}%` },
+        );
+      }
+      // --- END: Apply agentSearch filter ---
+console.log('isAgentDefault', isAgentDefault);
+      // --- START: Apply isDefaultAgent filter ---
+      if (isAgentDefault !== undefined) {
+        query.andWhere('user.isAgentDefault = :isAgentDefault', { isAgentDefault });
+      }
+      // --- END: Apply isDefaultAgent filter ---
+
+
+      const rawData = await query
         .select([
           'user.id as user_id',
           'user.name as user_name',
@@ -1927,7 +1966,7 @@ export class TicketService {
 
       for (const row of rawData) {
         const agentId = row.user_id;
-        const agentName = `${row.user_name} ${row.user_lastname}`;
+        const agentName = `${row.user_name} ${row.user_lastname}`; // Access directly from row.user if selected in query
         const label = this.formatMonthLabel(
           parseInt(row.month_num),
           parseInt(row.year_num),
