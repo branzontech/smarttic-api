@@ -28,6 +28,8 @@ import { FormFieldsModule } from './modules/form-fields/form-fields.module';
 import { FormResponsesModule } from './modules/form-responses/form-responses.module';
 import { FormResponseFilesModule } from './modules/form-response-files/form-response-files.module';
 import { NoteAgentTicketsModule } from './modules/note-agent-tickets/note-agent-tickets.module';
+import { LaborHoursModule } from './modules/labor-hours/labor-hours.module';
+import { HolidaysModule } from './modules/holidays/holidays.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -59,7 +61,9 @@ import { NoteAgentTicketsModule } from './modules/note-agent-tickets/note-agent-
     FormFieldsModule,
     FormResponsesModule,
     FormResponseFilesModule,
-    NoteAgentTicketsModule
+    NoteAgentTicketsModule,
+    LaborHoursModule,
+    HolidaysModule
   ],
   controllers: [],
   providers: [
