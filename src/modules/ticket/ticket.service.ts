@@ -29,7 +29,7 @@ import { TicketState } from '../ticket-state/entities/ticket-state.entity';
 import { User } from '../users/entities/user.entity';
 import { TicketTitleService } from '../ticket-title/ticket-title.service';
 import { NoteAgentTicket } from '../note-agent-tickets/entities/note-agent-ticket.entity';
-import { calculateBusinessMinutesBetweenDates } from '../calculateBusinessMinutesBetweenDates';
+import { calculateBusinessMinutesBetweenDates } from '../../common/helpers/business-time.util';
 import { LaborHoursService } from '../labor-hours/labor-hours.service';
 import { HolidaysService } from '../holidays/holidays.service';
 
