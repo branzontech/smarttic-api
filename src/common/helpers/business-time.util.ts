@@ -1,4 +1,3 @@
-/* eslint-disable prettier/prettier */
 import { LaborHour } from 'src/modules/labor-hours/entities/labor-hours.entity';
 import { Holiday } from 'src/modules/holidays/entities/holidays.entity';
 import * as dayjs from 'dayjs';
