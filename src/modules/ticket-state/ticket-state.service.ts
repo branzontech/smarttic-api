@@ -9,7 +9,7 @@ import {
 import { CreateTicketStateDto } from './dto/create-ticket-state.dto';
 import { UpdateTicketStateDto } from './dto/update-ticket-state.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Not, Repository } from 'typeorm';
+import { EntityManager, In, Not, Repository } from 'typeorm';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { TicketState } from './entities/ticket-state.entity';
 import { CACHE_TTL } from 'src/common/constants';
@@ -224,6 +224,46 @@ export class TicketStateService {
       return ticketState;
     } catch (error) {
       this.handleError(error, 'No se pudo recuperar el último estado del ticket.');
+    }
+  }
+
+  async findInProcessState(manager?: EntityManager): Promise<TicketState> {
+    try {
+      const cacheKey = 'ticketState:inProcess';
+      let ticketState = await this.cacheManager.getCache<TicketState>(cacheKey);
+      if (!ticketState) {
+        const repo = manager ? manager.getRepository(TicketState) : this.ticketStateRepository;
+        ticketState = await repo.findOne({
+          where: { 
+            state: true, 
+            isInitialPreapproval: false, 
+            isRejectedPreapproval: false,
+            orderTicket: Not(1)
+          },
+          order: { orderTicket: 'ASC' },
+        });
+        
+        if (!ticketState) {
+          const lastState = await this.findLastTicketState(manager);
+          ticketState = await repo.findOne({
+            where: { 
+              state: true, 
+              isInitialPreapproval: false, 
+              isRejectedPreapproval: false,
+              orderTicket: Not(In([1, lastState.orderTicket])) 
+            },
+            order: { orderTicket: 'ASC' },
+          });
+        }
+        
+        if (!ticketState) {
+          throw new NotFoundException('No se encontró estado de ticket en proceso activo.');
+        }
+        await this.cacheManager.setCache(cacheKey, ticketState);
+      }
+      return ticketState;
+    } catch (error) {
+      this.handleError(error, 'No se pudo recuperar el estado en proceso del ticket.');
     }
   }
 

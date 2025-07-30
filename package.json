@@ -37,6 +37,8 @@
     "cache-manager-ioredis-yet": "^2.1.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "colombian-holidays": "^5.0.3",
+    "dayjs": "^1.11.13",
     "dotenv": "^16.4.7",
     "nodemailer": "^6.10.0",
     "passport-jwt": "^4.0.1",

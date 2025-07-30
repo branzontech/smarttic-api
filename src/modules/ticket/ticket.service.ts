@@ -29,6 +29,9 @@ import { TicketState } from '../ticket-state/entities/ticket-state.entity';
 import { User } from '../users/entities/user.entity';
 import { TicketTitleService } from '../ticket-title/ticket-title.service';
 import { NoteAgentTicket } from '../note-agent-tickets/entities/note-agent-ticket.entity';
+import { calculateBusinessMinutesBetweenDates } from '../../common/helpers/business-time.util';
+import { LaborHoursService } from '../labor-hours/labor-hours.service';
+import { HolidaysService } from '../holidays/holidays.service';
 
 @Injectable()
 export class TicketService {
@@ -48,6 +51,8 @@ export class TicketService {
     private readonly cacheManager: CacheManagerService,
     private readonly ticketStateService: TicketStateService,
     private readonly ticketTitleService: TicketTitleService,
+    private readonly laborHoursService: LaborHoursService,
+    private readonly holidaysService: HolidaysService,
   ) {}
 
   async create(
@@ -1448,31 +1453,70 @@ export class TicketService {
     startDate: string,
     endDate: string,
   ): Promise<string> {
-    const lastState = await this.ticketStateService.findLastTicketState();
+    const inProcessState = await this.ticketStateService.findInProcessState();
+    const closedState = await this.ticketStateService.findLastTicketState();
 
     const query = this.ticketRepository
       .createQueryBuilder('ticket')
-      .select(
-        'ROUND(AVG(EXTRACT(EPOCH FROM (ticket."updatedAt" - ticket."createdAt")) / 3600)::numeric, 2)',
-        'avgHours',
-      );
-
-    this.applyUserFilters(query, user);
-
-    query
-      .andWhere('ticket."createdAt" BETWEEN :startDate AND :endDate', {
+      .leftJoinAndSelect('ticket.branch', 'branch')
+      .leftJoinAndSelect('ticket.ticketTitle', 'ticketTitle')
+      .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
+      .where('ticket."createdAt" BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       })
-      .andWhere('ticket."ticketStateId" = :stateId', { stateId: lastState.id })
-      .andWhere('ticket.state = true')
       .andWhere('ticket."deletedAt" IS NULL')
-      .andWhere('ticket."updatedAt" IS NOT NULL');
+      .andWhere('ticket."state" = true')
+      .andWhere('ticket."updatedAt" IS NOT NULL')
+      .andWhere('ticket."ticketStateId" IN (:...validStates)', {
+        validStates: [inProcessState.id, closedState.id],
+      });
 
-    const result = await query.getRawOne();
-    const avgHours = result?.avgHours ? parseFloat(result.avgHours) : 0;
+    this.applyUserFilters?.(query, user);
 
-    return `${avgHours} horas`;
+    const tickets = await query.getMany();
+
+    let totalResponseHours = 0;
+    let responseCount = 0;
+
+    for (const ticket of tickets) {
+      const branchId = ticket.branchId;
+      const priority = ticket.ticketTitle?.ticketPriority;
+      const responseSlahours = priority?.hoursResponse;
+
+      if (!branchId || !responseSlahours) continue;
+
+      const laborHours = await this.laborHoursService.findAll({ branchId });
+      const holidays = await this.holidaysService.findAll({ branchId });
+
+      const responseBusinessMinutes = calculateBusinessMinutesBetweenDates(
+        ticket.createdAt,
+        ticket.updatedAt,
+        laborHours,
+        holidays,
+      );
+      const responseBusinessHours = responseBusinessMinutes / 60;
+
+      if (responseBusinessHours > 0) {
+        totalResponseHours += responseBusinessHours;
+        responseCount++;
+
+        const withinSLA = responseBusinessHours <= responseSlahours;
+        const stateLabel = ticket.ticketStateId === inProcessState.id ? 'en proceso' : 'cerrado';
+
+        console.log(
+          `⏱ Ticket ${ticket.id} (${stateLabel}) → ${responseBusinessHours.toFixed(2)} horas | SLA: ${responseSlahours}h | ${withinSLA ? '✅ Cumple SLA' : '❌ No cumple SLA'}`
+        );
+      }
+    }
+
+    const avgResponseHours = responseCount > 0
+      ? (totalResponseHours / responseCount).toFixed(2)
+      : '0.00';
+
+    console.log(`📊 Promedio de tiempo de respuesta: ${avgResponseHours} horas`);
+
+    return `${avgResponseHours} horas`;
   }
 
   private applyUserFilters(
@@ -1583,7 +1627,7 @@ export class TicketService {
   async getAverageResponse(
     user: userSession,
     startDate: string,
-    endDate: string,
+    endDate: string
   ): Promise<{
     title: string;
     description: string;
@@ -1592,47 +1636,63 @@ export class TicketService {
   }> {
     endDate = this.formatedEndDate(endDate);
 
-    const lastState = await this.ticketStateService.findLastTicketState();
+    const inProcessState = await this.ticketStateService.findInProcessState();
+    const closedState = await this.ticketStateService.findLastTicketState();
 
     const query = this.ticketRepository
       .createQueryBuilder('ticket')
-      .select('ticket."ticketNumber"', 'ticketNumber')
-      .addSelect('tc."prefix"', 'prefix')
-      .addSelect(
-        `
-        ROUND(
-          EXTRACT(EPOCH FROM (ticket."updatedAt" - ticket."createdAt")) / 3600,
-          2
-        )
-        `,
-        'response_time_hours',
-      )
-      .leftJoin('ticket.ticketTitle', 'tt')
-      .leftJoin('tt.ticketCategory', 'tc');
-
-    this.applyUserFilters(query, user);
-
-    query
-      .andWhere('ticket."createdAt" BETWEEN :startDate AND :endDate', {
+      .leftJoinAndSelect('ticket.branch', 'branch')
+      .leftJoinAndSelect('ticket.ticketTitle', 'tt')
+      .leftJoinAndSelect('tt.ticketCategory', 'tc')
+      .where('ticket."createdAt" BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       })
-      .andWhere('ticket."ticketStateId" = :stateId', { stateId: lastState.id })
+      .andWhere('ticket."ticketStateId" IN (:...validStates)', {
+          validStates: [inProcessState.id, closedState.id],
+      })
       .andWhere('ticket."updatedAt" IS NOT NULL')
       .andWhere('ticket.state = true')
       .andWhere('ticket."deletedAt" IS NULL')
-      .orderBy('ticket."createdAt"', 'DESC');
+      .orderBy('ticket."createdAt"', "DESC");
 
-    const raw = await query.getRawMany();
+    this.applyUserFilters?.(query, user);
 
-    const chartLabels = raw.map((r) => `${r.prefix}-${r.ticketNumber}`);
-    const chartData = raw.map((r) =>
-      r.response_time_hours ? parseFloat(r.response_time_hours) : 0,
-    );
+    const tickets = await query.getMany();
+
+    const chartLabels: string[] = [];
+    const chartData: number[] = [];
+
+    for (const ticket of tickets) {
+      const branchId = ticket.branchId;
+      const createdAt = ticket.createdAt;
+      const updatedAt = ticket.updatedAt;
+      const prefix = ticket.ticketTitle?.ticketCategory?.prefix || "";
+      const ticketNumber = ticket.ticketNumber;
+
+      if (!branchId || !createdAt || !updatedAt) continue;
+
+      const laborHours = await this.laborHoursService.findAll({ branchId });
+      const holidays = await this.holidaysService.findAll({ branchId });
+
+      const businessMinutes = calculateBusinessMinutesBetweenDates(
+        createdAt,
+        updatedAt,
+        laborHours,
+        holidays
+      );
+
+      const hours =
+        businessMinutes > 0 ? parseFloat((businessMinutes / 60).toFixed(2)) : 0;
+
+      chartLabels.push(`${prefix}-${ticketNumber}`);
+      chartData.push(hours);
+    }
+
 
     return {
-      title: 'Tiempo Promedio de Respuesta por Ticket',
-      description: 'Horas entre la creación y finalización del ticket',
+      title: "Tiempo Promedio de Respuesta por Ticket",
+      description: "Horas hábiles entre la creación y finalización del ticket",
       chartData,
       chartLabels,
     };
