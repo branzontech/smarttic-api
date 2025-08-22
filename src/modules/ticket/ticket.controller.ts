@@ -114,13 +114,14 @@ export class TicketController {
   })
   async findAll(
     @CurrentUser() user: userSession,
-    @Query('skip', new ParseIntPipe({ optional: true })) skip = 0,
-    @Query('take', new ParseIntPipe({ optional: true })) take = 100,
-    @Query('filter') filter?: string,
-    @Query('columnFilters') columnFilters?: columnDataFilter[],
-    @Query('orderBy') orderBy?: columnDataOrder[]
+    @Query('search') search?: string,
+    @Query('stateId') stateId?: string,
+    @Query('priorityId') priorityId?: string,
+    @Query('branchId') branchId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string
   ) {
-    return await this.ticketService.findAll(user, skip, take, filter, columnFilters, orderBy);
+    return await this.ticketService.findAll(user, search, stateId, priorityId, branchId, startDate, endDate);
   }
 
   @Get('dashboard/cards')
@@ -379,12 +380,11 @@ export class TicketController {
       type: 'object',
       properties: {
         ids: {
-          type: 'array',
-          items: { type: 'string', format: 'uuid' },
-          example: [
+          type: 'string',
+          format: 'uuid',
+          example: 
             '123e4567-e89b-12d3-a456-426614174000',
-            '123e4567-e89b-12d3-a456-426614174001',
-          ],
+          
         },
         description: {
           type: 'string',
@@ -433,9 +433,9 @@ export class TicketController {
   })
   async updateStatusToOpen(
     @CurrentUser() user: userSession,
-    @Body() body: { TicketIds: string[]; description: string }
+    @Body() body: { ticketId: string; description: string }
   ) {
-    return await this.ticketService.updateStatusToOpen(user, body.TicketIds, body.description);
+    return await this.ticketService.updateStatusToOpen(user, body.ticketId, body.description);
   }
 
 
@@ -492,24 +492,22 @@ export class TicketController {
 
   @Patch('rejected')
   @ApiOperation({
-    summary: 'Rechazar uno o más tickets',
+    summary: 'Rechazar ticket',
     description: `
-      Cambia el estado de uno o más tickets a "Rechazado", registra una nota con el motivo y notifica al usuario creador de cada ticket. 
-      Si algún correo falla, se informa en el mensaje de respuesta.`,
+      Cambia el estado de un ticket a "Rechazado", registra una nota con el motivo y notifica al usuario creador de cada ticket. 
+      Si el correo falla, se informa en el mensaje de respuesta.`,
   })
   @ApiBody({
-    description: 'IDs de tickets a rechazar y motivo del rechazo',
+    description: 'ID de tickets a rechazar y motivo del rechazo',
     schema: {
       type: 'object',
       properties: {
-        ids: {
-          type: 'array',
-          description: 'Lista de IDs (UUIDs) de los tickets a rechazar',
-          items: {
+        id: {
+          
             type: 'string',
             format: 'uuid',
             example: '123e4567-e89b-12d3-a456-426614174000',
-          },
+          
         },
         description: {
           type: 'string',
@@ -524,7 +522,7 @@ export class TicketController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Tickets rechazados exitosamente',
+    description: 'Ticket rechazado exitosamente',
     schema: {
       type: 'object',
       properties: {
@@ -534,17 +532,8 @@ export class TicketController {
         },
         message: {
           type: 'string',
-          examples: {
-            allSuccess: {
-              value: 'Todos los tickets fueron rechazados y notificados correctamente.',
-            },
-            partialFail: {
-              value: 'Algunos tickets fueron rechazados pero algunos correos fallaron (2/5). Ver detalles:\n- Ticket ID: x, Correo: y, Motivo: z',
-            },
-            allFail: {
-              value: 'Los tickets fueron rechazados pero ningún correo fue enviado exitosamente.',
-            },
-          },
+          description: 'Ticket fue rechazado y notificado correctamente.',
+          
         },
       },
     },
@@ -614,11 +603,11 @@ export class TicketController {
     @CurrentUser() user: userSession,
     @Body()
     body: {
-      TicketIds: string[];
+      ticketId: string;
       description: string;
     },
   ) {
-    return this.ticketService.updateStatusToRejected(user, body.TicketIds, body.description);
+    return this.ticketService.updateStatusToRejected(user, body.ticketId, body.description);
   }
 
 

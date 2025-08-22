@@ -20,13 +20,15 @@ import { FormResponseFile } from '../form-response-files/entities/form-response-
 import { TicketTitleModule } from '../ticket-title/ticket-title.module';
 import { LaborHoursModule } from '../labor-hours/labor-hours.module';
 import { HolidaysModule } from '../holidays/holidays.module';
+import { AssignedTicketFileModule } from '../assigned-ticket-file/assigned-ticket-file.module';
+import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
 
 
 
 @Module({
-  imports: [ TypeOrmModule.forFeature([Ticket, TicketTitle, TicketState, FormResponse, FormResponseFile]), FormResponseFilesModule,
+  imports: [ TypeOrmModule.forFeature([Ticket, TicketTitle, TicketState, FormResponse, FormResponseFile, TicketFile]), FormResponseFilesModule,
   UsersModule, CacheManagerModule, TicketStateModule, TicketTitleModule, AssignedUserTicketModule, BranchModule, FormResponsesModule,
-    forwardRef(() => SurveyResponseModule), EmailModule, forwardRef(() => TicketDetailModule), LaborHoursModule, HolidaysModule ],
+  forwardRef(() => SurveyResponseModule), EmailModule, forwardRef(() => TicketDetailModule), LaborHoursModule, HolidaysModule,  AssignedTicketFileModule ],
   controllers: [TicketController],
   providers: [TicketService ],
   exports: [TicketService],

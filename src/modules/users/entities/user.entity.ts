@@ -13,10 +13,6 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  // new field ticket_limit
-  @Column({nullable: true})
-  limite_ticket: number;
-
   @Column()
   name: string;
 
@@ -44,11 +40,20 @@ export class User {
   @Column({nullable: true})
   numberIdentification: string;
 
-  @Column({ unique: true })
+  @Column({ unique: true, nullable: true })
   username: string;
 
   @Column()
   password: string;
+  
+  @Column({default: 0})
+  age: number;
+
+  @Column({nullable: true})
+  limite_ticket: number;
+
+  @Column({nullable: true})
+  profileImageName: string;
 
   @Column({nullable: true})
   roleId?: string;

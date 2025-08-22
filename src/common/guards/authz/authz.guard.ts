@@ -26,7 +26,7 @@ export class AuthzGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const token = extractTokenFromHeader(request);
     if (!token) {
-      throw new UnauthorizedException('Token is missing');
+      throw new UnauthorizedException('Token no encontrado');
     }
 
     let payload: any;
@@ -35,7 +35,7 @@ export class AuthzGuard implements CanActivate {
         secret: process.env.SECRET_KEY, 
       });
     } catch (error) {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw new UnauthorizedException('Token invalido o expirado');
     }
 
     const userId = payload.sub;
@@ -51,7 +51,7 @@ export class AuthzGuard implements CanActivate {
       });
 
       if (!user) {
-        throw new ForbiddenException('User not found');
+        throw new ForbiddenException('Usuario no encontrado');
       }
 
       const sessionTTL = Number(process.env.CACHE_SESSION_TTL) || 3600;
@@ -67,6 +67,7 @@ export class AuthzGuard implements CanActivate {
       companyId: user.companyId,
       branchId: user.branchId,
       isDesignatedApprover: user.isDesignatedApprover,
+      profileImageName: user.profileImageName,
       branches: user.assignedBranches?.map((assigned) => ({
         id: assigned.branch.id,
         name: assigned.branch.name,
@@ -105,7 +106,7 @@ export class AuthzGuard implements CanActivate {
     });
     
     if (!hasPermission && !user.role.isConfigurator) {
-      throw new ForbiddenException('Access denied: insufficient permissions');
+      throw new ForbiddenException('Acceso denegado: No tiene permisos para esta acción');
     }
 
     return true;

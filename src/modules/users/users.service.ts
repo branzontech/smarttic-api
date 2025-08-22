@@ -17,6 +17,9 @@ import { BranchService } from '../branch/branch.service';
 import { AssignedUserBranch } from '../assigned-user-branch/entities/assigned-user-branch.entity';
 import { AssignedUserTicket } from '../assigned-user-ticket/entities/assigned-user-ticket.entity';
 import { TicketStateService } from '../ticket-state/ticket-state.service';
+import { columnDataFilter } from 'src/common/types';
+import { join } from 'path';
+import { existsSync, unlinkSync } from 'fs';
 
 @Injectable()
 export class UsersService {
@@ -35,7 +38,9 @@ export class UsersService {
   async create(user: CreateUserDto): Promise<User> {
     const queryRunner =
       this.userRepository.manager.connection.createQueryRunner();
-
+    const imagePath = user.profileImageName
+    ? join(__dirname, '../../../', user.profileImageName)
+    : null;
     try {
       await queryRunner.startTransaction();
 
@@ -43,6 +48,7 @@ export class UsersService {
         username,
         password,
         email,
+        numberIdentification,
         roleId,
         branches = [],
         branchId,
@@ -50,15 +56,15 @@ export class UsersService {
       } = user;
 
       // Verificar existencia de nombre de usuario y email (incluyendo eliminados)
-      const [existUsername, existEmail, roleExists] = await Promise.all([
-        this.userRepository.findOne({ where: { username } }),
+      const [existNumberIdentification, existEmail, roleExists] = await Promise.all([
+        this.userRepository.findOne({ where: { numberIdentification } }),
         this.userRepository.findOne({ where: { email } }),
         this.roleRepository.findOne({ where: { id: roleId } }),
       ]);
 
-      if (existUsername)
+      if (existNumberIdentification)
         throw new BadRequestException(
-          `El usuario con nombre de usuario ${username} ya existe`,
+          `El usuario con numero de identificacion ${existNumberIdentification} ya existe`,
         );
       if (existEmail)
         throw new BadRequestException(
@@ -124,15 +130,31 @@ export class UsersService {
       return savedUser;
     } catch (error) {
       await queryRunner.rollbackTransaction();
-      throw new BadRequestException('Error creating user: ' + error.message);
+       if (imagePath && existsSync(imagePath)) {
+        try {
+          unlinkSync(imagePath);
+          console.log('Imagen eliminada por error al crear usuario:', imagePath);
+        } catch (e) {
+          console.error('Error al eliminar la imagen:', e.message);
+        }
+      }
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error; // ya viene con mensaje
+      }
+
+      throw new InternalServerErrorException('Error al crear el usuario: ' + error.message);
     } finally {
       await queryRunner.release();
     }
   }
 
-  async findAll(skip: number, take: number, filter?: string) {
+  async findAll(skip: number, 
+    take: number, 
+    filter?: string,
+    columnFilters?: columnDataFilter[]) {
     try {
-      const cacheKey = `users:skip:${skip}:take:${take}:filter:${filter || ''}`;
+      const filtersKey = columnFilters?.map((f) => `${f.id}:${f.value}`).join(',') || '';
+      const cacheKey = `users:skip:${skip}:take:${take}:filter:${filter || ''}:columnFilters:${filtersKey}`;
       const cachedData = await this.cacheManager.getCache<{
         data: any[];
         total: number;
@@ -151,9 +173,8 @@ export class UsersService {
       // Filtro (se mantiene igual)
       if (filter) {
         queryBuilder.andWhere(
-          `
-          "user"."name" ILIKE :filter OR 
-          "user"."lastname" ILIKE :filter OR 
+          `   
+          CONCAT(user.name, ' ', user.lastname) ILIKE :filter OR 
           "user"."email" ILIKE :filter OR 
           "role"."name" ILIKE :filter OR 
           "identificationType"."description" ILIKE :filter OR
@@ -162,6 +183,50 @@ export class UsersService {
           `,
           { filter: `%${filter}%` },
         );
+      }
+
+      if (columnFilters?.length) {
+        for (const { id, value } of columnFilters) {
+          if (!value) continue;
+
+          if (id === 'fullName') {
+            queryBuilder.andWhere(
+              `(CONCAT(user.name, ' ', user.lastname) ILIKE :userValue OR user.companyname ILIKE :userValue)`,
+              { userValue: `%${value}%` },
+            );
+            continue;
+          }
+
+          if (id === 'assignedBranches.branch') {
+            const branchNames = value.split(',')
+              .map((v) => v.trim())
+              .filter((v) => v.length > 0);
+
+            if (branchNames.length) {
+              const orConditions = branchNames.map((name, index) => {
+                return `branches.name ILIKE :branchName${index}`;
+              }).join(' OR ');
+
+              const params = branchNames.reduce((acc, name, index) => {
+                acc[`branchName${index}`] = `%${name}%`;
+                return acc;
+              }, {} as Record<string, string>);
+
+              queryBuilder.andWhere(`(${orConditions})`, params);
+            }
+            continue;
+          }
+
+          // Convertir a alias y campo
+          const [alias, field] = id.split('.');
+          if (!alias || !field) continue;
+
+          const paramName = `${alias}_${field}`;
+          // Agrega el filtro ILIKE de forma dinámica
+          queryBuilder.andWhere(`${alias}.${field} ILIKE :${paramName}`, {
+            [paramName]: `%${value}%`,
+          });
+        }
       }
 
       // Paginado después de filtrar
@@ -235,83 +300,64 @@ export class UsersService {
 
   async findDefaultAgents(branchId?: string, manager?: EntityManager): Promise<User[]> {
     const repo = manager ? manager.getRepository(User) : this.userRepository;
-    return repo.find({
-      where: [
-        {
-          branchId: branchId,
-          isAgentDefault: true,
-          state: true,
-          role: { isAgent: true },
-        },
-        {
-          branchId: IsNull(),
-          isAgentDefault: true,
-          state: true,
-          role: { isAgent: true },
-        },
-      ],
-      relations: ['role'],
-    });
+
+    const query = repo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.role', 'role')
+      .leftJoin('user.assignedBranches', 'assignedUserBranch')
+      .where('user.isAgentDefault = :isAgentDefault', { isAgentDefault: true })
+      .andWhere('user.state = :state', { state: true })
+      .andWhere('role.isAgent = :isAgent', { isAgent: true });
+
+    if (branchId) {
+      query.andWhere('assignedUserBranch.branchId = :branchId', { branchId });
+    }
+
+    return await query.getMany();
   }
 
 
   async findAllAgent(branchId?: string): Promise<{ data: User[] }> {
-    const cacheKey = `user:AllAgent`;
-    const cachedUser = await this.cacheManager.getCache<{ data: User[] }>(
-      cacheKey,
-    );
+    const cacheKey = `user:AllAgent:${branchId || 'all'}`;
+    const cachedUser = await this.cacheManager.getCache<{ data: User[] }>(cacheKey);
     if (cachedUser) return cachedUser;
 
-    const where = branchId
-      ? [
-          {
-            state: true,
-            isDesignatedApprover: false,
-            branchId: branchId,
-            role: { isAgent: true },
-          },
-          {
-            state: true,
-            isDesignatedApprover: false,
-            branchId: IsNull(),
-            role: { isAgent: true },
-          },
-        ]
-      : {
-          state: true,
-          isDesignatedApprover: false,
-          role: { isAgent: true },
-        };
+    const query = this.userRepository
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.role', 'role')
+      .leftJoinAndSelect('user.assignedBranches', 'assignedUserBranch')
+      .where('user.state = :state', { state: true })
+      .andWhere('user.isDesignatedApprover = :isDesignatedApprover', { isDesignatedApprover: false })
+      .andWhere('role.isAgent = :isAgent', { isAgent: true });
 
-    const user = await this.userRepository.find({
-      where,
-      relations: ['role'],
-    });
+    if (branchId) {
+      query.andWhere('assignedUserBranch.branchId = :branchId', { branchId });
+    }
 
-    if (!user) throw new NotFoundException(`Agentes no encontrados`);
+    const users = await query.getMany();
+
+    if (!users || users.length === 0) {
+      throw new NotFoundException(`Agentes no encontrados`);
+    }
 
     const lastState = await this.ticketStateService.findLastTicketState();
-
-    if (!lastState)
-      throw new NotFoundException(
-        `Hubo un error al obtener los agentes. Detalle: Estado de ticket`,
-      );
+    if (!lastState) {
+      throw new NotFoundException(`Hubo un error al obtener los agentes. Detalle: Estado de ticket`);
+    }
 
     const resultWithTickets = await Promise.all(
-      user.map(async (agent) => {
-        const activeTicketsCount =
-          await this.assignedUserTicketRepository.count({
-            where: {
-              user: { id: agent.id },
+      users.map(async (agent) => {
+        const activeTicketsCount = await this.assignedUserTicketRepository.count({
+          where: {
+            user: { id: agent.id },
+            state: true,
+            ticket: {
+              ticketState: { id: Not(lastState.id) },
               state: true,
-              ticket: {
-                ticketState: { id: Not(lastState.id) },
-                state: true,
-              },
             },
-
-            relations: ['ticket', 'ticket.ticketState'],
-          });
+          },
+          relations: ['ticket', 'ticket.ticketState'],
+        });
 
         return {
           ...agent,
@@ -320,10 +366,11 @@ export class UsersService {
       }),
     );
 
-    await this.cacheManager.setCache(cacheKey, user, CACHE_TTL);
+    await this.cacheManager.setCache(cacheKey, { data: resultWithTickets }, CACHE_TTL);
 
     return { data: resultWithTickets };
   }
+
 
   async findDesignatedApproverAgent(branchId?: string, manager?: EntityManager): Promise<User> {
     try {

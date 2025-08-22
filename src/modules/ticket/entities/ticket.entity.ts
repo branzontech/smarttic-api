@@ -1,3 +1,4 @@
+import { AssignedTicketFile } from 'src/modules/assigned-ticket-file/entities/assigned-ticket-file.entity';
 import { AssignedUserTicket } from 'src/modules/assigned-user-ticket/entities/assigned-user-ticket.entity';
 import { Branch } from 'src/modules/branch/entities/branch.entity';
 import { FormResponse } from 'src/modules/form-responses/entities/form-response.entity';
@@ -76,8 +77,11 @@ export class Ticket {
   branch?: Branch;
 
   @OneToOne(() => FormResponse, (formResponse) => formResponse.ticket)
-  @JoinColumn() // Indica que FormResponse guardará el ticketId como FK
+  @JoinColumn() 
   formResponse: FormResponse;
+
+  @OneToMany(() => AssignedTicketFile, (assigned) => assigned.ticket)
+  ticketFiles: AssignedTicketFile[];
 
   @CreateDateColumn()
   createdAt: Date;

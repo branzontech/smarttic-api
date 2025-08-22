@@ -72,7 +72,7 @@ export class TicketStateService {
         });
       }
 
-      queryBuilder.orderBy('ticketState.createdAt', 'DESC').skip(skip).take(take);
+      queryBuilder.orderBy('ticketState.orderTicket', 'ASC').skip(skip).take(take);
 
       const [ticketStates, total] = await queryBuilder.getManyAndCount();
 

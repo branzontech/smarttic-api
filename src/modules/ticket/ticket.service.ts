@@ -32,6 +32,8 @@ import { NoteAgentTicket } from '../note-agent-tickets/entities/note-agent-ticke
 import { calculateBusinessMinutesBetweenDates } from '../../common/helpers/business-time.util';
 import { LaborHoursService } from '../labor-hours/labor-hours.service';
 import { HolidaysService } from '../holidays/holidays.service';
+import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
+import { AssignedTicketFile } from '../assigned-ticket-file/entities/assigned-ticket-file.entity';
 
 @Injectable()
 export class TicketService {
@@ -46,6 +48,10 @@ export class TicketService {
     private readonly formResponseRepository: Repository<FormResponse>,
     @InjectRepository(FormResponseFile)
     private readonly formResponseFilesRepository: Repository<FormResponseFile>,
+    @InjectRepository(TicketFile)
+    private readonly ticketFile: Repository<TicketFile>,
+    @InjectRepository(AssignedTicketFile)
+    private readonly assignedTicketFile: Repository<AssignedTicketFile>,    
     private readonly userService: UsersService,
     private readonly emailService: EmailService,
     private readonly cacheManager: CacheManagerService,
@@ -65,7 +71,7 @@ export class TicketService {
     await queryRunner.startTransaction();
 
     try {
-      // VALIDACIONES BÁSICAS
+      
       if (!user?.id) throw new BadRequestException('Usuario no autenticado');
       if (!createTicketDto.ticketTitleId) {
         throw new BadRequestException('El título del ticket es obligatorio');
@@ -88,7 +94,7 @@ export class TicketService {
         manager,
       );
 
-      const branchId = user.role.isAdmin || user.role.isConfigurator
+      const branchId = user.role.isAdmin || user.role.isConfigurator || user.role.isAgent
         ? createTicketDto.branchId
         : user.branchId;
 
@@ -96,7 +102,7 @@ export class TicketService {
         throw new BadRequestException('El ticket no tiene sucursal asignada');
       }
 
-      // AGENTE ASIGNADO
+      
       let selectedAgent: User | null = null;
 
       if (hasPreapprovalInCategory) {
@@ -105,7 +111,7 @@ export class TicketService {
         selectedAgent = await this.agentAssigned(branchId, lastState.id, manager);
       }
 
-      // CREACIÓN DEL TICKET
+      
       const {
         formResponse: formResponseData,
         assignedUsers,
@@ -121,7 +127,7 @@ export class TicketService {
 
       const savedTicket = await manager.save(ticket);
 
-      // RESPUESTA DE FORMULARIO
+     
       if (
         formResponseData &&
         formResponseData.formId?.trim() &&
@@ -152,7 +158,26 @@ export class TicketService {
         await manager.save(Ticket, savedTicket); 
       }
 
-      // ASIGNACIÓN DE AGENTE
+      if (createTicketDto.files?.length > 0) {
+        for (const fileInfo of createTicketDto.files) {
+          const ticketFile = this.ticketFile.create({
+            fileName :fileInfo.fileName,
+            fileType: fileInfo.fileType,
+            fileExtension: fileInfo.fileExtension,
+            fileSize: fileInfo.fileSize,
+          });
+          await manager.save(ticketFile);
+         
+          const assignedTicketFile = this.assignedTicketFile.create({
+            fileId: ticketFile.id,
+            ticketId: savedTicket.id,
+          });
+          await manager.save(assignedTicketFile);            
+          
+        }
+      }
+
+     
       const assignedUserId = user.role.isAgent ? user.id : selectedAgent?.id;
 
       if (assignedUserId) {
@@ -163,10 +188,10 @@ export class TicketService {
         await manager.save(assigned);
       }
 
-      // CONFIRMAR TRANSACCIÓN
+      
       await queryRunner.commitTransaction();
 
-      // FUERA DE LA TRANSACCIÓN
+     
       const resultData = await this.findOne(savedTicket.id);
       let emailStatus = 'Ticket creado exitosamente';
       const emailErrors: string[] = [];
@@ -273,23 +298,18 @@ export class TicketService {
 
   async findAll(
     user: userSession,
-    skip: number = 0,
-    take: number = 10,
-    filter?: string,
-    columnFilters?: columnDataFilter[],
-    orderBy?: columnDataOrder[],
+    search?: string, 
+    stateId?: string, 
+    priorityId?: string,
+    branchId?: string,
+    startDate?: string,
+    endDate?: string,
   ) {
     try {
       const { isAdmin, isAgent, isConfigurator } = user.role;
       const isClient = !isAdmin && !isAgent && !isConfigurator;
-      const filtersKey =
-        columnFilters?.map((f) => `${f.id}:${f.value}`).join(',') || '';
-      const orderKey = orderBy?.map((f) => `${f.id}:${f.desc}`).join(',') || '';
-      const cacheKey = `tickets:userId:${
-        user.id
-      }:skip:${skip}:take:${take}:filter:${
-        filter || ''
-      }:columnFilters:${filtersKey}:columnOrder:${orderKey}`;
+      const cacheKey = `tickets:userId:${user.id}:search:${search}:stateId:${stateId}
+      :priorityId:${priorityId}:branchId:${branchId}:startDate:${startDate}:endDate:${endDate}`;
       const cachedData = await this.cacheManager.getCache<{
         data: Ticket[];
         total: number;
@@ -345,95 +365,76 @@ export class TicketService {
       }
 
       // Filtro por texto de búsqueda
-      if (filter) {
+      if (search) {
         const conditions: string[] = [];
 
         // Campos visibles por todos
         conditions.push(
-          `CONCAT(ticketCategory.prefix,'-', "ticket"."ticketNumber") ILIKE :filter`,
-          'ticketTitle.description ILIKE :filter',
-          'ticketPriority.title ILIKE :filter',
-          'ticketState.title ILIKE :filter',
-          'ticketState.title ILIKE :filter',
-          'agent.name ILIKE :filter',
-          'agent.lastname ILIKE :filter',
+          `CONCAT(ticketCategory.prefix,'-', "ticket"."ticketNumber") ILIKE :search`,
+          'ticketTitle.description ILIKE :search',
+          'ticketPriority.title ILIKE :search',
+          'ticketState.title ILIKE :search',
+          'ticketState.title ILIKE :search',
+          'agent.name ILIKE :search',
+          'agent.lastname ILIKE :search',
         );
 
         if (!isClient) {
           conditions.push(
-            'user.name ILIKE :filter',
-            'user.lastname ILIKE :filter',
+            'user.name ILIKE :search',
+            'user.lastname ILIKE :search',
           );
         }
 
         if (isConfigurator) {
-          conditions.push('company.companyname ILIKE :filter');
+          conditions.push('company.companyname ILIKE :search');
         }
 
         if (isConfigurator || isAdmin) {
-          conditions.push('branch.name ILIKE :filter');
+          conditions.push('branch.name ILIKE :search');
         }
 
         queryBuilder.andWhere(`(${conditions.join(' OR ')})`, {
-          filter: `%${filter}%`,
+          filter: `%${search}%`,
         });
       }
 
-      if (columnFilters?.length) {
-        for (const { id, value } of columnFilters) {
-          if (!value) continue;
-
-          if (id === 'user') {
-            queryBuilder.andWhere(
-              `(user.name ILIKE :userValue OR user.lastname ILIKE :userValue OR user.companyname ILIKE :userValue)`,
-              { userValue: `%${value}%` },
-            );
-            continue;
+      // Filtro por estado
+      if (stateId) {
+        let ticketStateId = stateId;
+        let condition = 'ticket.ticketStateId = :ticketStateId';
+        if (stateId==='active') {
+          const lastState = await this.ticketStateService.findLastTicketState();
+          if (!lastState) {
+            throw new NotFoundException(`Error al encontrar el ultimo estado.`);
           }
-          if (id === 'agent') {
-            queryBuilder.andWhere(
-              `(agent.name ILIKE :agentValue OR agent.lastname ILIKE :agentValue)`,
-              { agentValue: `%${value}%` },
-            );
-            continue;
-          }
-
-          if (id === 'ticketNomenclature') {
-            queryBuilder.andWhere(
-              `(CONCAT(ticketCategory.prefix,'-', "ticket"."ticketNumber") ILIKE :ticketNomenclatureValue)`,
-              { ticketNomenclatureValue: `%${value}%` },
-            );
-            continue;
-          }
-
-          // Convertir a alias y campo
-          const [alias, field] = id.split('.');
-          if (!alias || !field) continue;
-
-          const paramName = `${alias}_${field}`;
-
-          // Agrega el filtro ILIKE de forma dinámica
-          queryBuilder.andWhere(`${alias}.${field} ILIKE :${paramName}`, {
-            [paramName]: `%${value}%`,
-          });
+          ticketStateId=lastState.id;
+          condition = 'ticket.ticketStateId <> :ticketStateId';
         }
+        queryBuilder.andWhere(condition, { ticketStateId });
       }
 
-      if (orderBy?.length) {
-        for (const { id, desc } of orderBy) {
-          if (!id) continue;
-
-          const parts = id.split('.');
-          if (parts.length !== 2) continue; // Asegura que sea del tipo alias.campo
-
-          const [alias, field] = parts;
-          queryBuilder.addOrderBy(`${alias}.${field}`, desc ? 'DESC' : 'ASC');
-        }
-      } else {
-        queryBuilder.orderBy('ticket.createdAt', 'DESC');
+      // Filtro por prioridad
+      if (priorityId) {
+        queryBuilder.andWhere('ticket.ticketPriorityId = :priorityId', { priorityId });
       }
 
-      queryBuilder.skip(skip).take(take);
+      // Filtro por sucursal
+      if (branchId) {
+        queryBuilder.andWhere('ticket.branchId = :branchId', { branchId });
+      }
+
+      // Filtro por rango de fechas
+      if (startDate && endDate) {
+        queryBuilder.andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
+          startDate,
+          endDate,
+        });
+      }
+
+     
+
+      queryBuilder.orderBy('ticket."createdAt"', "DESC");
 
       const [tickets, total] = await queryBuilder.getManyAndCount();
 
@@ -522,7 +523,7 @@ export class TicketService {
 
   async updateStatusToOpen(
     userSession: userSession,
-    ids: string[],
+    id: string,
     description: string,
   ): Promise<{ data: Ticket[]; message: string }> {
     const queryRunner = this.ticketRepository.manager.connection.createQueryRunner();
@@ -538,12 +539,12 @@ export class TicketService {
       if (!ticketFirstState) {
         throw new NotFoundException(`Error al encontrar el primer estado.`);
       }
-      const lastState = await this.ticketStateService.findLastTicketState(manager);
-      if (!lastState) {
-        throw new NotFoundException(`Error al encontrar el ultimo estado.`);
+      const firstState = await this.ticketStateService.findFirstTicketState(manager);
+      if (!firstState) {
+        throw new NotFoundException(`Error al encontrar el primer estado.`);
       }
 
-      for (const id of ids) {
+      // for (const id of ids) {
         const note = manager.create(NoteAgentTicket, {
           description,
           userId: userSession.id,
@@ -561,7 +562,7 @@ export class TicketService {
         }
 
         const updatedTicket = await manager.save(ticket);
-        updatedTickets.push(updatedTicket);
+        // updatedTickets.push(updatedTicket);
 
         const existingAssignment = await manager.findOne(AssignedUserTicket, {
           where: {
@@ -574,7 +575,7 @@ export class TicketService {
           existingAssignment.state = false;
           await manager.save(existingAssignment);
         }
-        const selectedAgent = await this.agentAssigned(updatedTicket.branchId, lastState.id, manager);
+        const selectedAgent = await this.agentAssigned(updatedTicket.branchId, firstState.id, manager);
         const assignedUserId = selectedAgent?.id;
         if (assignedUserId) {
           const assigned =manager.create(AssignedUserTicket, {
@@ -584,14 +585,14 @@ export class TicketService {
           await manager.save(assigned);
         }
          
-      }
+      // }
       await queryRunner.commitTransaction();
 
       // Notificación por correo y limpieza de caché después de la transacción
-      for (const ticket of updatedTickets) {
-        const resultData = await this.findOne(ticket.id);
+      // for (const ticket of updatedTickets) {
+        const resultData = await this.findOne(id);
         const user = await this.userService.findById(resultData.userId);
-        if (!user) continue;
+        // if (!user) continue;
 
         const prefix = resultData.ticketTitle.ticketCategory.prefix;
         const priority = resultData.ticketTitle.ticketPriority.title;
@@ -637,18 +638,18 @@ export class TicketService {
         }
 
         await this.cacheManager.delCache(`ticket:${ticket.id}`);
-      }
+      // }
 
       await this.cacheManager.delCache('tickets:*');
       await this.cacheManager.delCache('notes:*');
 
-      let message = 'Tickets abiertos correctamente.';
+      let message = 'Ticket abierto correctamente.';
 
-      if (emailErrors.length === ids.length) {
-        message += ' Sin embargo, **ningún correo fue enviado exitosamente**.';
-      } else if (emailErrors.length > 0) {
-        message += ` Algunos correos **fallaron** (${emailErrors.length}/${ids.length}).`;
-      }
+      // if (emailErrors.length === ids.length) {
+      //   message += ' Sin embargo, **ningún correo fue enviado exitosamente**.';
+      // } else if (emailErrors.length > 0) {
+      //   message += ` Algunos correos **fallaron** (${emailErrors.length}/${ids.length}).`;
+      // }
 
       // Detallar errores si los hay
       if (emailErrors.length > 0) {
@@ -1103,7 +1104,7 @@ export class TicketService {
 
   async updateStatusToRejected(
     userSession: userSession,
-    ids: string[],
+    id: string,
     description: string
   ): Promise<{ data: Ticket[]; message: string }> {
     const queryRunner = this.ticketRepository.manager.connection.createQueryRunner();
@@ -1120,7 +1121,7 @@ export class TicketService {
         throw new NotFoundException('Estado "Rechazado" no configurado en el sistema');
       }
 
-      for (const id of ids) {
+      // for (const id of ids) {
         const note = manager.create(NoteAgentTicket, {
           description,
           userId: userSession.id,
@@ -1138,7 +1139,7 @@ export class TicketService {
         }
 
         const updatedTicket = await manager.save(ticket);
-        updatedTickets.push(updatedTicket);
+        
         const existingAssignment = await manager.findOne(AssignedUserTicket, {
           where: {
             userId: userSession.id,
@@ -1150,15 +1151,15 @@ export class TicketService {
           existingAssignment.state = false;
           await manager.save(existingAssignment);
         }
-      }
+      // }
 
       await queryRunner.commitTransaction();
 
       // Enviar correos y limpiar caché
-      for (const ticket of updatedTickets) {
-        const resultData = await this.findOne(ticket.id);
+      // for (const ticket of updatedTickets) {
+        const resultData = await this.findOne(id);
         const user = await this.userService.findById(resultData.userId);
-        if (!user) continue;
+        // if (!user) continue;
 
         const prefix = resultData.ticketTitle.ticketCategory.prefix;
         const priority = resultData.ticketTitle.ticketPriority.title;
@@ -1194,19 +1195,15 @@ export class TicketService {
         }
 
         await this.cacheManager.delCache(`ticket:${ticket.id}`);
-      }
+      // }
 
       await this.cacheManager.delCache('tickets:*');
       await this.cacheManager.delCache('notes:*');
 
       // Construir mensaje
-      let message = 'Tickets rechazados correctamente.';
+      let message = 'Ticket rechazado correctamente.';
 
-      if (emailErrors.length === ids.length) {
-        message += ' Sin embargo, **ningún correo fue enviado exitosamente**.';
-      } else if (emailErrors.length > 0) {
-        message += ` Algunos correos **fallaron** (${emailErrors.length}/${ids.length}).`;
-      }
+      
 
       if (emailErrors.length > 0) {
         const errorDetails = emailErrors
@@ -1290,6 +1287,7 @@ export class TicketService {
   ): Promise<User | null> {
     let selectedAgent: User | null = null;
     const defaultAgents = await this.userService.findDefaultAgents(branchId, manager);
+    console.log('Default Agents:', defaultAgents);
     for (const agent of defaultAgents) {
       if (!agent.limite_ticket || agent.limite_ticket === 0) {
         selectedAgent = agent;
@@ -1303,11 +1301,12 @@ export class TicketService {
         .innerJoin('ticket.ticketState', 'state')
         .where('assigned.userId = :userId', { userId: agent.id })
         .andWhere('assigned.state = true')
-        .andWhere('state.id != :cerradoStateId', {
-          cerradoStateId: lastStateId,
+        .andWhere('state.id != :closeStateId', {
+          closeStateId: lastStateId,
         })
         .getCount();
- 
+ console.log('assignedCount:', assignedCount);
+ console.log('agent.limite_ticket:',  agent.limite_ticket);
       if (assignedCount < agent.limite_ticket) {
         selectedAgent = agent;
         break;
@@ -1514,7 +1513,6 @@ export class TicketService {
       ? (totalResponseHours / responseCount).toFixed(2)
       : '0.00';
 
-    console.log(`📊 Promedio de tiempo de respuesta: ${avgResponseHours} horas`);
 
     return `${avgResponseHours} horas`;
   }
@@ -1998,7 +1996,7 @@ export class TicketService {
         );
       }
       // --- END: Apply agentSearch filter ---
-console.log('isAgentDefault', isAgentDefault);
+
       // --- START: Apply isDefaultAgent filter ---
       if (isAgentDefault !== undefined) {
         query.andWhere('user.isAgentDefault = :isAgentDefault', { isAgentDefault });

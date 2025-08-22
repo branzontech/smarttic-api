@@ -31,11 +31,11 @@ export class AuthService {
     };
   }
 
-  async logIn(username: string, pass: string) {
-    const user = await this.usersService.findByUsername(username);
+  async logIn(email: string, pass: string) {
+    const user = await this.usersService.findByEmail(email);
 
     if (!user)
-      throw new NotFoundException(`Usuario con correo electrónico ${username} no encontrado`);
+      throw new NotFoundException(`Usuario con correo electrónico ${email} no encontrado`);
 
     const checkPassword = await compare(pass, user.password);
     if (!checkPassword) throw new UnauthorizedException("Usuario no autorizado. Rebice su usuario y contraseña");
