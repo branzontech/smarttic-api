@@ -64,7 +64,7 @@ export class Ticket {
   @OneToMany(() => TicketDetail, (TicketDetail) => TicketDetail.ticket)
   ticketDetails: TicketDetail[];
 
-  @OneToMany(() => SurveyResponse, (surveyResponse) => surveyResponse.surveyCalification)
+  @OneToMany(() => SurveyResponse, (surveyResponse) => surveyResponse.ticket)
   surveyResponses: SurveyResponse[];
 
   @OneToMany(() => AssignedUserTicket, (assignedUserTicket) => assignedUserTicket.ticket)

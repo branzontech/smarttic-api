@@ -9,6 +9,7 @@ import { User } from '../users/entities/user.entity';
 import { TicketStateModule } from '../ticket-state/ticket-state.module';
 import { EmailModule } from 'src/common/email/email.module';
 import { UsersModule } from '../users/users.module';
+import { WebsocketModule } from 'src/common/websocket/websocket.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { UsersModule } from '../users/users.module';
     TicketStateModule,
     EmailModule,
     UsersModule,
+    WebsocketModule,
   ],
   controllers: [AssignedUserTicketController],
   providers: [AssignedUserTicketService],

@@ -16,6 +16,7 @@ import { CACHE_TTL } from 'src/common/constants';
 import { TicketStateService } from '../ticket-state/ticket-state.service';
 import { UsersService } from '../users/users.service';
 import { EmailService } from 'src/common/email/email.service';
+import { WebsocketService } from 'src/common/websocket/websocket.service';
 
 @Injectable()
 export class AssignedUserTicketService {
@@ -26,6 +27,7 @@ export class AssignedUserTicketService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Ticket)
     private readonly ticketRepository: Repository<Ticket>,
+    private readonly websocketService: WebsocketService,    
     private readonly ticketStateService: TicketStateService,
     private readonly cacheManager: CacheManagerService,
     private readonly userService: UsersService,
@@ -111,11 +113,11 @@ export class AssignedUserTicketService {
         await queryRunner.manager.save(assignedUserTicket);
 
       await queryRunner.commitTransaction();
-
+ 
       // Email fuera de la transacción
       const userData = await this.getUserById(userId);
       const ticketData = await this.getTicketById(ticketId);
-
+      this.websocketService.emit('ticket-agentAsigned', ticketData);
       const emailData = {
         fullname: `${userData.name} ${userData.lastname}` || 'User',
         ticketState: ticketData.ticketState.description,
@@ -333,14 +335,6 @@ export class AssignedUserTicketService {
     return user;
   }
 
-  // private async getTicketById_(ticketId: string): Promise<Ticket> {
-  //   const ticket = await this.ticketRepository.findOne({
-  //     where: { id: ticketId },
-  //   });
-  //   if (!ticket)
-  //     throw new NotFoundException(`Ticket with id ${ticketId} not found`);
-  //   return ticket;
-  // }
 
   private async getTicketById(ticketId: string): Promise<Ticket> {
     const ticket = await this.ticketRepository.findOne({

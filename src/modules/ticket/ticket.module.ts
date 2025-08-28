@@ -22,13 +22,15 @@ import { LaborHoursModule } from '../labor-hours/labor-hours.module';
 import { HolidaysModule } from '../holidays/holidays.module';
 import { AssignedTicketFileModule } from '../assigned-ticket-file/assigned-ticket-file.module';
 import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
+import { WebsocketModule } from 'src/common/websocket/websocket.module';
 
 
 
 @Module({
-  imports: [ TypeOrmModule.forFeature([Ticket, TicketTitle, TicketState, FormResponse, FormResponseFile, TicketFile]), FormResponseFilesModule,
-  UsersModule, CacheManagerModule, TicketStateModule, TicketTitleModule, AssignedUserTicketModule, BranchModule, FormResponsesModule,
-  forwardRef(() => SurveyResponseModule), EmailModule, forwardRef(() => TicketDetailModule), LaborHoursModule, HolidaysModule,  AssignedTicketFileModule ],
+  imports: [ TypeOrmModule.forFeature([Ticket, TicketTitle, TicketState, FormResponse, FormResponseFile, TicketFile]),
+   FormResponseFilesModule, UsersModule, CacheManagerModule, TicketStateModule, TicketTitleModule, AssignedUserTicketModule,
+   BranchModule, FormResponsesModule, forwardRef(() => SurveyResponseModule), EmailModule, forwardRef(() => TicketDetailModule),
+    LaborHoursModule, HolidaysModule, AssignedTicketFileModule, WebsocketModule ],
   controllers: [TicketController],
   providers: [TicketService ],
   exports: [TicketService],

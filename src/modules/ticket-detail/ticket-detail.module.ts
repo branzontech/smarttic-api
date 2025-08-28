@@ -11,6 +11,7 @@ import { TicketModule } from '../ticket/ticket.module';
 import { EmailModule } from 'src/common/email/email.module';
 import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
 import { AssignedTicketDetailFileModule } from '../assigned-ticket-detail-file/assigned-ticket-detail-file.module';
+import { WebsocketModule } from 'src/common/websocket/websocket.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { AssignedTicketDetailFileModule } from '../assigned-ticket-detail-file/a
     AssignedTicketDetailFileModule,
     forwardRef(() => TicketModule), 
     CacheManagerModule,
+    WebsocketModule,
   ],
   controllers: [TicketDetailController],
   providers: [TicketDetailService],

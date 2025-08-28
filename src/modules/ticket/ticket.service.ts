@@ -34,6 +34,7 @@ import { LaborHoursService } from '../labor-hours/labor-hours.service';
 import { HolidaysService } from '../holidays/holidays.service';
 import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
 import { AssignedTicketFile } from '../assigned-ticket-file/entities/assigned-ticket-file.entity';
+import { WebsocketService } from 'src/common/websocket/websocket.service';
 
 @Injectable()
 export class TicketService {
@@ -51,7 +52,8 @@ export class TicketService {
     @InjectRepository(TicketFile)
     private readonly ticketFile: Repository<TicketFile>,
     @InjectRepository(AssignedTicketFile)
-    private readonly assignedTicketFile: Repository<AssignedTicketFile>,    
+    private readonly assignedTicketFile: Repository<AssignedTicketFile>,
+    private readonly websocketService: WebsocketService,    
     private readonly userService: UsersService,
     private readonly emailService: EmailService,
     private readonly cacheManager: CacheManagerService,
@@ -192,7 +194,9 @@ export class TicketService {
       await queryRunner.commitTransaction();
 
      
+
       const resultData = await this.findOne(savedTicket.id);
+      this.websocketService.emit('ticket-saved', resultData);
       let emailStatus = 'Ticket creado exitosamente';
       const emailErrors: string[] = [];
 
@@ -319,6 +323,8 @@ export class TicketService {
 
       const queryBuilder = this.ticketRepository
         .createQueryBuilder('ticket')
+        .leftJoinAndSelect('ticket.surveyResponses', 'surveyResponses')        
+        .leftJoinAndSelect('surveyResponses.surveyCalification', 'surveyCalification') 
         .leftJoinAndSelect('ticket.formResponse', 'formResponse')
         .leftJoinAndSelect('formResponse.form', 'form')
         .leftJoinAndSelect('ticket.ticketState', 'ticketState')
@@ -400,7 +406,7 @@ export class TicketService {
       }
 
       // Filtro por estado
-      if (stateId) {
+      if (stateId && stateId !== 'all') {
         let ticketStateId = stateId;
         let condition = 'ticket.ticketStateId = :ticketStateId';
         if (stateId==='active') {
@@ -544,7 +550,6 @@ export class TicketService {
         throw new NotFoundException(`Error al encontrar el primer estado.`);
       }
 
-      // for (const id of ids) {
         const note = manager.create(NoteAgentTicket, {
           description,
           userId: userSession.id,
@@ -562,7 +567,7 @@ export class TicketService {
         }
 
         const updatedTicket = await manager.save(ticket);
-        // updatedTickets.push(updatedTicket);
+        
 
         const existingAssignment = await manager.findOne(AssignedUserTicket, {
           where: {
@@ -585,14 +590,13 @@ export class TicketService {
           await manager.save(assigned);
         }
          
-      // }
+      
       await queryRunner.commitTransaction();
-
-      // Notificación por correo y limpieza de caché después de la transacción
-      // for (const ticket of updatedTickets) {
+     
         const resultData = await this.findOne(id);
+        this.websocketService.emit('ticket-toOpen', resultData);
         const user = await this.userService.findById(resultData.userId);
-        // if (!user) continue;
+     
 
         const prefix = resultData.ticketTitle.ticketCategory.prefix;
         const priority = resultData.ticketTitle.ticketPriority.title;
@@ -709,13 +713,14 @@ export class TicketService {
           `Error al encontrar el usuario del ticket.`,
         );
       }
-
       const resultData = await this.findOne(updatedTicket.id);
+      this.websocketService.emit('ticket-inProcess', resultData);
       let emailStatus = 'El ticket fue pasado a EN PROCESO exitosamente';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
       const emailErrors: string[] = [];
-      const agent = await this.userService.findById(updatedTicket.assignedUsers[0].userId);
+      const agent = resultData.assignedUsers ? await this.userService.findById(resultData.assignedUsers[0].userId) : null;
+     
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
@@ -814,7 +819,7 @@ export class TicketService {
         message: emailStatus,
       };
     } catch (error) {
-      console.error('Error in updateStatusToAssisted:', error);
+      console.error('Error in updateStatusToInProces:', error);
       throw new InternalServerErrorException(
         'No se pudo actualizar el estado del ticket.',
       );
@@ -849,13 +854,13 @@ export class TicketService {
           `Error al encontrar el usuario del ticket.`,
         );
       }
-
       const resultData = await this.findOne(updatedTicket.id);
+      this.websocketService.emit('ticket-toAssisted', resultData);
       let emailStatus = 'El ticket atendido exitosamente';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
       const emailErrors: string[] = [];
-      const agent = await this.userService.findById(updatedTicket.assignedUsers[0].userId);
+      const agent = resultData.assignedUsers ? await this.userService.findById(resultData.assignedUsers[0].userId) : null;
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
@@ -988,12 +993,12 @@ export class TicketService {
         );
       }
       const resultData = await this.findOne(updatedTicket.id);
-
+      this.websocketService.emit('ticket-closeted', resultData);
       let emailStatus = 'Ticket cerrado con éxito';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
       const emailErrors: string[] = [];
-      const agent = await this.userService.findById(updatedTicket.assignedUsers[0].userId);
+      const agent = resultData.assignedUsers ? await this.userService.findById(resultData.assignedUsers[0].userId) : null;
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',

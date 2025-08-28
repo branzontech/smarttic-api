@@ -18,6 +18,7 @@ import { UsersService } from '../users/users.service';
 import { EmailService } from 'src/common/email/email.service';
 import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
 import { AssignedTicketDetailFile } from '../assigned-ticket-detail-file/entities/assigned-ticket-detail-file.entity';
+import { WebsocketService } from 'src/common/websocket/websocket.service';
 
 @Injectable()
 export class TicketDetailService {
@@ -30,6 +31,7 @@ export class TicketDetailService {
     private readonly ticketFile: Repository<TicketFile>,
     @InjectRepository(AssignedTicketDetailFile)
     private readonly assignedTicketDetailFile: Repository<AssignedTicketDetailFile>, 
+    private readonly websocketService: WebsocketService,    
     private readonly ticketStateService: TicketStateService,
     private readonly ticketService: TicketService,
     private readonly userService: UsersService,
@@ -113,7 +115,8 @@ export class TicketDetailService {
       }
 
       await queryRunner.commitTransaction();
-
+      this.websocketService.emit('ticketDetail-saved', savedDetail, ticketId); 
+      this.websocketService.emit('tickets-updated', savedDetail);
       let emailStatus = 'Ticket created successfully';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
@@ -248,6 +251,8 @@ export class TicketDetailService {
         .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
         .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
         .leftJoinAndSelect('ticket.user', 'user')
+        .leftJoinAndSelect('ticket.surveyResponses', 'surveyResponses')        
+        .leftJoinAndSelect('surveyResponses.surveyCalification', 'surveyCalification')        
         .leftJoinAndSelect('ticket.assignedUsers', 'assignedUsers', 'assignedUsers.state = true')
         .leftJoinAndSelect('user.branch', 'branch')
         .leftJoinAndSelect('assignedUsers.user', 'agent')
@@ -337,6 +342,7 @@ export class TicketDetailService {
           notes: ticket.notes,
           user:ticket.user,
           agent:ticket.assignedUsers && ticket.assignedUsers.length>0 ? ticket.assignedUsers[0].user : null,
+          surveyResponses:ticket.surveyResponses,
           ticketState: ticket.ticketState,
           ticketStateOrder: ticket.ticketState?.orderTicket || 1,
           ticketTitle: ticket.ticketTitle,
