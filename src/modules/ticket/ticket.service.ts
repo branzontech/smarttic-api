@@ -346,6 +346,7 @@ export class TicketService {
       // Filtro por rol
       if (!isConfigurator) {
         if (isClient) {
+          queryBuilder.andWhere('ticketState.isInitialPreapproval = false ');
           queryBuilder.andWhere(
             'ticket.userId = :userId',
             { userId: user.id },
@@ -380,7 +381,6 @@ export class TicketService {
           'ticketTitle.description ILIKE :search',
           'ticketPriority.title ILIKE :search',
           'ticketState.title ILIKE :search',
-          'ticketState.title ILIKE :search',
           'agent.name ILIKE :search',
           'agent.lastname ILIKE :search',
         );
@@ -401,7 +401,7 @@ export class TicketService {
         }
 
         queryBuilder.andWhere(`(${conditions.join(' OR ')})`, {
-          filter: `%${search}%`,
+          search: `%${search}%`,
         });
       }
 
