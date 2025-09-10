@@ -34,6 +34,7 @@ import { PublicModule } from './modules/public/public.module';
 import { TicketFilesModule } from './modules/ticket-files/ticket-files.module';
 import { AssignedTicketFileModule } from './modules/assigned-ticket-file/assigned-ticket-file.module';
 import { AssignedTicketDetailFileModule } from './modules/assigned-ticket-detail-file/assigned-ticket-detail-file.module';
+import { ShortcutsModule } from './modules/shortcuts/shortcuts.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -71,7 +72,8 @@ import { AssignedTicketDetailFileModule } from './modules/assigned-ticket-detail
     PublicModule,
     TicketFilesModule,
     AssignedTicketFileModule,
-    AssignedTicketDetailFileModule
+    AssignedTicketDetailFileModule,
+    ShortcutsModule
   ],
   controllers: [],
   providers: [

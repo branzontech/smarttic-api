@@ -46,7 +46,7 @@ export class AuthzGuard implements CanActivate {
       // 🔹 Intentamos recuperar el usuario desde la BD si no está en cache
       user = await this.userRepository.findOne({
         where: { id: userId },
-        relations: ['role', 'role.permissions', 'assignedBranches',
+        relations: ['shortcuts', 'role', 'role.permissions', 'assignedBranches',
     'assignedBranches.branch',],
       });
 
@@ -68,6 +68,7 @@ export class AuthzGuard implements CanActivate {
       branchId: user.branchId,
       isDesignatedApprover: user.isDesignatedApprover,
       profileImageName: user.profileImageName,
+      shortcuts:user.shortcuts.map(s=>s.menuId),
       branches: user.assignedBranches?.map((assigned) => ({
         id: assigned.branch.id,
         name: assigned.branch.name,
@@ -89,13 +90,8 @@ export class AuthzGuard implements CanActivate {
    
     request['user'] = mappedUser;
 
-    // ✅ Validar permisos del usuario
     const { method, route } = request;
     const endpoint = route.path;
-    
-    const hasPermission_ = user.role.permissions.some(
-      (perm) => perm.endpoint === endpoint && perm.methods.includes(method)
-    );
 
     const hasPermission = user.role.permissions.some((perm) => {
       const basePath = perm.endpoint.includes("/:id") ? perm.endpoint.split('/:id')[0] : perm.endpoint;

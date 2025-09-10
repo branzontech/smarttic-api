@@ -29,7 +29,11 @@ import { TicketService } from './ticket.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { columnDataFilter, columnDataOrder, userSession } from 'src/common/types';
+import {
+  columnDataFilter,
+  columnDataOrder,
+  userSession,
+} from 'src/common/types';
 import { PerformanceResponseDto } from './dto/performnce-response.dto';
 import { multerOptions } from 'src/common/helpers/file-upload.helper';
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -47,16 +51,17 @@ export class TicketController {
   @Post()
   @UseInterceptors(FilesInterceptor('files', 10, multerOptions))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ 
+  @ApiOperation({
     summary: 'Create a new ticket with form responses',
-    description: 'Creates a new ticket and associates it with form responses in a single transaction'
+    description:
+      'Creates a new ticket and associates it with form responses in a single transaction',
   })
-  @ApiBody({ 
-    description: 'Ticket data including form responses', 
-    type: CreateTicketDto 
+  @ApiBody({
+    description: 'Ticket data including form responses',
+    type: CreateTicketDto,
   })
-  @ApiResponse({ 
-    status: 201, 
+  @ApiResponse({
+    status: 201,
     description: 'Ticket and form responses created successfully',
     schema: {
       example: {
@@ -65,24 +70,28 @@ export class TicketController {
           ticketNumber: 1001,
           description: 'Problema de conexión',
           formResponse: {
-            responses: { problema: 'Error 404', pasos: 'Intenté reiniciar el router' }
-          }
+            responses: {
+              problema: 'Error 404',
+              pasos: 'Intenté reiniciar el router',
+            },
+          },
         },
-        message: 'Ticket created successfully'
-      }
-    }
+        message: 'Ticket created successfully',
+      },
+    },
   })
-  @ApiResponse({ 
-    status: 400, 
-    description: 'Invalid input data or missing required fields' 
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid input data or missing required fields',
   })
-  @ApiResponse({ 
-    status: 500, 
-    description: 'Internal server error during creation' 
+  @ApiResponse({
+    status: 500,
+    description: 'Internal server error during creation',
   })
   async create(
     @UploadedFiles() files: Express.Multer.File[],
-    @Body('createTicketDto', ParseJsonPipe) createTicketDto: Partial<CreateTicketDto>,
+    @Body('createTicketDto', ParseJsonPipe)
+    createTicketDto: Partial<CreateTicketDto>,
     @CurrentUser() user: userSession,
   ) {
     return await this.ticketService.create(createTicketDto, user, files);
@@ -119,9 +128,17 @@ export class TicketController {
     @Query('priorityId') priorityId?: string,
     @Query('branchId') branchId?: string,
     @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string
+    @Query('endDate') endDate?: string,
   ) {
-    return await this.ticketService.findAll(user, search, stateId, priorityId, branchId, startDate, endDate);
+    return await this.ticketService.findAll(
+      user,
+      search,
+      stateId,
+      priorityId,
+      branchId,
+      startDate,
+      endDate,
+    );
   }
 
   @Get('dashboard/cards')
@@ -167,11 +184,43 @@ export class TicketController {
     description: 'Failed to fetch dashboard statistics',
   })
   async getDashboardCards(
-    @CurrentUser() user: userSession, 
+    @CurrentUser() user: userSession,
     @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string
+    @Query('endDate') endDate?: string,
   ) {
     return await this.ticketService.getDashboardCards(user, startDate, endDate);
+  }
+
+  @Get('dashboard/ticketByDate')
+  @ApiOperation({
+    summary: 'Get tickets grouped by date range',
+    description:
+      'Returns the number of tickets grouped dynamically by hour, day, or month depending on the selected date range',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Ticket by date data retrieved successfully',
+    schema: {
+      example: {
+        title: 'Movimiento de tickets',
+        data: [
+          { label: '08:00', count: 5 },
+          { label: '09:00', count: 2 },
+          { label: '10:00', count: 7 },
+        ],
+      },
+    },
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Failed to fetch ticket by date',
+  })
+  async getTicketByDate(
+    @CurrentUser() user: userSession,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+  ) {
+    return await this.ticketService.getTicketByDate(user, startDate, endDate);
   }
 
   @Get('dashboard/caseStateMonth')
@@ -199,9 +248,13 @@ export class TicketController {
   async getCaseStatusByMonth(
     @CurrentUser() user: userSession,
     @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string
+    @Query('endDate') endDate?: string,
   ) {
-    return await this.ticketService.getCaseStatusByMonth(user, startDate, endDate);
+    return await this.ticketService.getCaseStatusByMonth(
+      user,
+      startDate,
+      endDate,
+    );
   }
 
   @Get('dashboard/averageResponse')
@@ -230,9 +283,13 @@ export class TicketController {
   async getAverageResponse(
     @CurrentUser() user: userSession,
     @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string
+    @Query('endDate') endDate?: string,
   ) {
-    return await this.ticketService.getAverageResponse(user, startDate, endDate);
+    return await this.ticketService.getAverageResponse(
+      user,
+      startDate,
+      endDate,
+    );
   }
 
   @Get('dashboard/ticketsByCategories')
@@ -257,12 +314,16 @@ export class TicketController {
     status: 500,
     description: 'Internal server error while retrieving statistics',
   })
-  async getTicketsByCategoryStats(    
-    @CurrentUser() user: userSession, 
+  async getTicketsByCategoryStats(
+    @CurrentUser() user: userSession,
     @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string
+    @Query('endDate') endDate?: string,
   ) {
-    return await this.ticketService.getTicketsByCategoryStats(user, startDate, endDate);
+    return await this.ticketService.getTicketsByCategoryStats(
+      user,
+      startDate,
+      endDate,
+    );
   }
 
   @Get('dashboard/satisfactionIndicator')
@@ -285,21 +346,21 @@ export class TicketController {
   async getSatisfactionByRange(
     @CurrentUser() user: userSession,
     @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string
+    @Query('endDate') endDate?: string,
   ) {
-    
     return this.ticketService.getSatisfactionByRange(user, startDate, endDate);
   }
 
   @Get('dashboard/performanceByAgent')
   @ApiOperation({
     summary: 'Get agent performance metrics',
-    description: 'Returns performance data for top-performing agents based on resolved tickets within a given timeframe'
+    description:
+      'Returns performance data for top-performing agents based on resolved tickets within a given timeframe',
   })
   @ApiResponse({
     status: 200,
     description: 'Agent performance data',
-    type: PerformanceResponseDto
+    type: PerformanceResponseDto,
   })
   @ApiResponse({ status: 400, description: 'User has no assigned company' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
@@ -307,25 +368,25 @@ export class TicketController {
     name: 'agentCount',
     required: false,
     type: Number,
-    description: 'Maximum number of agents to return (default: 4)'
+    description: 'Maximum number of agents to return (default: 4)',
   })
   @ApiQuery({
     name: 'startDate',
     required: false,
     type: Date,
-    description: 'Start date for filtering (ISO format)'
+    description: 'Start date for filtering (ISO format)',
   })
   @ApiQuery({
     name: 'endDate',
     required: false,
     type: Date,
-    description: 'End date for filtering (ISO format)'
+    description: 'End date for filtering (ISO format)',
   })
   @ApiQuery({
     name: 'branchIds',
     required: false,
     type: [String],
-    description: 'Comma-separated branch IDs for filtering'
+    description: 'Comma-separated branch IDs for filtering',
   })
   async getAgentPerformance(
     @CurrentUser() user: userSession,
@@ -340,14 +401,12 @@ export class TicketController {
 
     return this.ticketService.getAgentPerformance(user, {
       agentCount,
-      startDate ,
-      endDate ,
+      startDate,
+      endDate,
       branchIds: branchIdsArray,
       agentSearch,
-      isAgentDefault
+      isAgentDefault,
     });
-
-    
   }
 
   @Get(':id')
@@ -382,9 +441,7 @@ export class TicketController {
         ids: {
           type: 'string',
           format: 'uuid',
-          example: 
-            '123e4567-e89b-12d3-a456-426614174000',
-          
+          example: '123e4567-e89b-12d3-a456-426614174000',
         },
         description: {
           type: 'string',
@@ -408,7 +465,8 @@ export class TicketController {
             },
             message: {
               type: 'string',
-              example: 'Tickets abiertos correctamente. Algunas notificaciones por correo pudieron haber fallado.',
+              example:
+                'Tickets abiertos correctamente. Algunas notificaciones por correo pudieron haber fallado.',
             },
           },
         },
@@ -433,11 +491,14 @@ export class TicketController {
   })
   async updateStatusToOpen(
     @CurrentUser() user: userSession,
-    @Body() body: { ticketId: string; description: string }
+    @Body() body: { ticketId: string; description: string },
   ) {
-    return await this.ticketService.updateStatusToOpen(user, body.ticketId, body.description);
+    return await this.ticketService.updateStatusToOpen(
+      user,
+      body.ticketId,
+      body.description,
+    );
   }
-
 
   @Patch('inProcess/:id')
   @ApiOperation({ summary: 'Update ticket status to in Process' })
@@ -503,11 +564,9 @@ export class TicketController {
       type: 'object',
       properties: {
         id: {
-          
-            type: 'string',
-            format: 'uuid',
-            example: '123e4567-e89b-12d3-a456-426614174000',
-          
+          type: 'string',
+          format: 'uuid',
+          example: '123e4567-e89b-12d3-a456-426614174000',
         },
         description: {
           type: 'string',
@@ -533,7 +592,6 @@ export class TicketController {
         message: {
           type: 'string',
           description: 'Ticket fue rechazado y notificado correctamente.',
-          
         },
       },
     },
@@ -607,26 +665,30 @@ export class TicketController {
       description: string;
     },
   ) {
-    return this.ticketService.updateStatusToRejected(user, body.ticketId, body.description);
+    return this.ticketService.updateStatusToRejected(
+      user,
+      body.ticketId,
+      body.description,
+    );
   }
 
-
   @Patch(':id')
-  @ApiOperation({ 
+  @ApiOperation({
     summary: 'Update a ticket and its form responses',
-    description: 'Updates ticket details and associated form responses atomically'
+    description:
+      'Updates ticket details and associated form responses atomically',
   })
-  @ApiParam({ 
-    name: 'id', 
-    description: 'UUID of the ticket to update', 
-    example: '550e8400-e29b-41d4-a716-446655440000' 
+  @ApiParam({
+    name: 'id',
+    description: 'UUID of the ticket to update',
+    example: '550e8400-e29b-41d4-a716-446655440000',
   })
-  @ApiBody({ 
-    description: 'Ticket update data including form responses', 
-    type: UpdateTicketDto 
+  @ApiBody({
+    description: 'Ticket update data including form responses',
+    type: UpdateTicketDto,
   })
-  @ApiResponse({ 
-    status: 200, 
+  @ApiResponse({
+    status: 200,
     description: 'Ticket and form responses updated successfully',
     schema: {
       example: {
@@ -634,18 +696,18 @@ export class TicketController {
         ticketNumber: 1001,
         description: 'Problema de conexión actualizado',
         formResponse: {
-          responses: { problema: 'Error 500', pasos: 'Reinicié el sistema' }
-        }
-      }
-    }
+          responses: { problema: 'Error 500', pasos: 'Reinicié el sistema' },
+        },
+      },
+    },
   })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Ticket not found' 
+  @ApiResponse({
+    status: 404,
+    description: 'Ticket not found',
   })
-  @ApiResponse({ 
-    status: 500, 
-    description: 'Failed to update ticket or form responses' 
+  @ApiResponse({
+    status: 500,
+    description: 'Failed to update ticket or form responses',
   })
   async update(
     @Param('id') id: string,

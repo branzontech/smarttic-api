@@ -18,6 +18,7 @@ export type userSession = {
   branchId: string;
   isDesignatedApprover: boolean;
   profileImageName: string;
+  shortcuts: string[];
   branches?: userSessionBranch[] | null;
   role: {
     id: string;

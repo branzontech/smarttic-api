@@ -7,6 +7,7 @@ import { Ticket } from 'src/modules/ticket/entities/ticket.entity';
 import { SurveyResponse } from 'src/modules/survey-response/entities/survey-response.entity';
 import { AssignedUserTicket } from 'src/modules/assigned-user-ticket/entities/assigned-user-ticket.entity';
 import { NoteAgentTicket } from 'src/modules/note-agent-tickets/entities/note-agent-ticket.entity';
+import { Shortcut } from 'src/modules/shortcuts/entities/shortcut.entity';
 
 @Entity('Users')
 export class User {
@@ -97,6 +98,9 @@ export class User {
 
   @OneToMany(() => SurveyResponse, (surveyResponse) => surveyResponse.user)
   surveyResponses: SurveyResponse[];
+
+  @OneToMany(() => Shortcut, (shortcut) => shortcut.user)
+  shortcuts: Shortcut[];
 
   @CreateDateColumn()
   createdAt: Date;
