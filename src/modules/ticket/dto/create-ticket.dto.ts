@@ -11,12 +11,29 @@ import {
   Min,
   Max,
   MaxLength,
-  ValidateNested
+  ValidateNested,
+  IsNumber
 } from 'class-validator';
 import { Type } from 'class-transformer';
 class CreateFormResponseDto {
   formId: string;
   responses: Record<string, any>;
+}
+class FileInfoDto {
+  @IsString()
+  @IsNotEmpty()
+  fileName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  fileType: string;
+
+  @IsNumber()
+  fileSize: number;
+
+  @IsString()
+  @IsNotEmpty()
+  fileExtension: string;
 }
 export class CreateTicketDto {
   @ApiPropertyOptional({
@@ -120,5 +137,5 @@ export class CreateTicketDto {
     },
   })
   @IsOptional()
-  files?: any;
+  files?: FileInfoDto[];
 }

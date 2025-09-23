@@ -4,11 +4,12 @@ import {
   ConflictException,
   InternalServerErrorException,
   HttpException,
+  BadRequestException,
 } from '@nestjs/common';
 import { CreateTicketStateDto } from './dto/create-ticket-state.dto';
 import { UpdateTicketStateDto } from './dto/update-ticket-state.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, In, Not, Repository } from 'typeorm';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { TicketState } from './entities/ticket-state.entity';
 import { CACHE_TTL } from 'src/common/constants';
@@ -31,25 +32,19 @@ export class TicketStateService {
 
       if (existingTicketState) {
         throw new ConflictException(
-          `Ticket state '${createTicketStateDto.title}' already exists.`,
+          `El estado del ticket '${createTicketStateDto.title}' ya existe.`,
         );
       }
 
-      const ticketState =
-        this.ticketStateRepository.create(createTicketStateDto);
-      const savedTicketState =
-        await this.ticketStateRepository.save(ticketState);
+      await this.validatePreapprovalFlags(createTicketStateDto);
+
+      const ticketState = this.ticketStateRepository.create(createTicketStateDto);
+      const savedTicketState = await this.ticketStateRepository.save(ticketState);
 
       await this.cacheManager.delCache(`ticketStates:*`);
       return savedTicketState;
     } catch (error) {
-      if (error instanceof ConflictException || error instanceof NotFoundException || error instanceof HttpException) {
-        throw error;
-      }
-      console.error('Error in create:', error);
-      throw new InternalServerErrorException(
-        'Could not create the ticket state.',
-      );
+      this.handleError(error, 'No se pudo crear el estado del ticket.');
     }
   }
 
@@ -77,8 +72,7 @@ export class TicketStateService {
         });
       }
 
-      // Aplicar paginación
-      queryBuilder.orderBy('ticketState.createdAt', 'DESC').skip(skip).take(take);
+      queryBuilder.orderBy('ticketState.orderTicket', 'ASC').skip(skip).take(take);
 
       const [ticketStates, total] = await queryBuilder.getManyAndCount();
 
@@ -87,10 +81,7 @@ export class TicketStateService {
 
       return result;
     } catch (error) {
-      console.error('Error in findAll:', error);
-      throw new InternalServerErrorException(
-        'Could not retrieve the list of ticket states.',
-      );
+      this.handleError(error, 'No se pudo recuperar la lista de estados de los tickets.');
     }
   }
 
@@ -105,7 +96,7 @@ export class TicketStateService {
         });
         if (!ticketState) {
           throw new NotFoundException(
-            `Ticket state with ID '${id}' not found.`,
+            `No se encontró el estado del ticket con ID '${id}'.`,
           );
         }
         await this.cacheManager.setCache(cacheKey, ticketState);
@@ -113,10 +104,7 @@ export class TicketStateService {
 
       return ticketState;
     } catch (error) {
-      console.error('Error in findOne:', error);
-      throw new InternalServerErrorException(
-        'Could not retrieve the ticket state.',
-      );
+      this.handleError(error, 'No se pudo recuperar el estado del ticket.');
     }
   }
 
@@ -127,11 +115,11 @@ export class TicketStateService {
 
       if (!ticketState) {
         ticketState = await this.ticketStateRepository.findOne({
-          where: { orderTicket: order, state: true },
+          where: { orderTicket: order, state: true, isInitialPreapproval: false, isRejectedPreapproval: false },
         });
         if (!ticketState) {
           throw new NotFoundException(
-            `Ticket state with order '${order}' not found.`,
+            `No se encontró el estado del ticket con el pedido '${order}'.`,
           );
         }
         await this.cacheManager.setCache(cacheKey, ticketState);
@@ -139,37 +127,143 @@ export class TicketStateService {
 
       return ticketState;
     } catch (error) {
-      console.error('Error in findByOrder:', error);
-      throw new InternalServerErrorException(
-        'Could not retrieve the ticket state.',
-      );
+      this.handleError(error, 'No se pudo recuperar el estado del ticket.');
     }
   }
 
-  async findLastTicketState(): Promise<TicketState> {
+  async findFirstTicketState(manager?: EntityManager): Promise<TicketState> {
     try {
-      const cacheKey = 'ticketState:last';
+      const cacheKey = 'ticketState:first';
       let ticketState = await this.cacheManager.getCache<TicketState>(cacheKey);
 
       if (!ticketState) {
-        // Buscar el registro con el orderTicket más alto y state: true
-        ticketState = await this.ticketStateRepository.findOne({
-          where: { state: true },
-          order: { orderTicket: 'DESC' }, // Ordenar por orderTicket descendente
+        const repo = manager ? manager.getRepository(TicketState) : this.ticketStateRepository;
+        ticketState = await  repo.findOne({
+          where: { state: true, isInitialPreapproval: false, isRejectedPreapproval: false },
+          order: { orderTicket: 'ASC' }, 
         });
 
         if (!ticketState) {
-          throw new NotFoundException('No active ticket states found.');
+          throw new NotFoundException('No se encontraron estados de tickets activos.');
         }
         await this.cacheManager.setCache(cacheKey, ticketState);
       }
 
       return ticketState;
     } catch (error) {
-      console.error('Error in findLastTicketState:', error);
-      throw new InternalServerErrorException(
-        'Could not retrieve the last ticket state.',
-      );
+      this.handleError(error, 'No se pudo recuperar el primer estado del ticket.');
+    }
+  }
+
+  async findInitialPreapprovalTicketState(manager?: EntityManager): Promise<TicketState> {
+    try {
+      const cacheKey = 'ticketState:nitialPreapproval';
+      let ticketState = await this.cacheManager.getCache<TicketState>(cacheKey);
+
+      if (!ticketState) {
+        const repo = manager ? manager.getRepository(TicketState) : this.ticketStateRepository;
+        ticketState = await repo.findOne({
+          where: { state: true, isInitialPreapproval: true, isRejectedPreapproval: false },
+          order: { orderTicket: 'ASC' }, 
+        });
+
+        if (!ticketState) {
+          throw new NotFoundException('No se encontraron estados de tickets activos.');
+        }
+        await this.cacheManager.setCache(cacheKey, ticketState);
+      }
+
+      return ticketState;
+    } catch (error) {
+      this.handleError(error, 'No se pudo recuperar el primer estado del ticket.');
+    }
+  }
+
+  async findRejectedPreapprovalTicketState(manager?: EntityManager): Promise<TicketState> {
+    try {
+      const cacheKey = 'ticketState:first';
+      let ticketState = await this.cacheManager.getCache<TicketState>(cacheKey);
+
+      if (!ticketState) {
+        const repo = manager ? manager.getRepository(TicketState) : this.ticketStateRepository;
+        ticketState = await repo.findOne({
+          where: { state: true, isInitialPreapproval: false, isRejectedPreapproval: true },
+          order: { orderTicket: 'ASC' }, 
+        });
+
+        if (!ticketState) {
+          throw new NotFoundException('No se encontraron estados de tickets activos.');
+        }
+        await this.cacheManager.setCache(cacheKey, ticketState);
+      }
+
+      return ticketState;
+    } catch (error) {
+      this.handleError(error, 'No se pudo recuperar el primer estado del ticket.');
+    }
+  }
+
+  async findLastTicketState(manager?: EntityManager): Promise<TicketState> {
+    try {
+      const cacheKey = 'ticketState:last';
+      let ticketState = await this.cacheManager.getCache<TicketState>(cacheKey);
+
+      if (!ticketState) {
+         const repo = manager ? manager.getRepository(TicketState) : this.ticketStateRepository;
+        ticketState = await repo.findOne({
+          where: { state: true, isInitialPreapproval: false, isRejectedPreapproval: false },
+          order: { orderTicket: 'DESC' }, 
+        });
+
+        if (!ticketState) {
+          throw new NotFoundException('No se encontraron estados de tickets activos.');
+        }
+        await this.cacheManager.setCache(cacheKey, ticketState);
+      }
+
+      return ticketState;
+    } catch (error) {
+      this.handleError(error, 'No se pudo recuperar el último estado del ticket.');
+    }
+  }
+
+  async findInProcessState(manager?: EntityManager): Promise<TicketState> {
+    try {
+      const cacheKey = 'ticketState:inProcess';
+      let ticketState = await this.cacheManager.getCache<TicketState>(cacheKey);
+      if (!ticketState) {
+        const repo = manager ? manager.getRepository(TicketState) : this.ticketStateRepository;
+        ticketState = await repo.findOne({
+          where: { 
+            state: true, 
+            isInitialPreapproval: false, 
+            isRejectedPreapproval: false,
+            orderTicket: Not(1)
+          },
+          order: { orderTicket: 'ASC' },
+        });
+        
+        if (!ticketState) {
+          const lastState = await this.findLastTicketState(manager);
+          ticketState = await repo.findOne({
+            where: { 
+              state: true, 
+              isInitialPreapproval: false, 
+              isRejectedPreapproval: false,
+              orderTicket: Not(In([1, lastState.orderTicket])) 
+            },
+            order: { orderTicket: 'ASC' },
+          });
+        }
+        
+        if (!ticketState) {
+          throw new NotFoundException('No se encontró estado de ticket en proceso activo.');
+        }
+        await this.cacheManager.setCache(cacheKey, ticketState);
+      }
+      return ticketState;
+    } catch (error) {
+      this.handleError(error, 'No se pudo recuperar el estado en proceso del ticket.');
     }
   }
 
@@ -184,8 +278,10 @@ export class TicketStateService {
       });
 
       if (!ticketState) {
-        throw new NotFoundException(`Ticket state with ID '${id}' not found.`);
+        throw new NotFoundException(`No se encontró el estado del ticket con ID '${id}'.`);
       }
+
+      await this.validatePreapprovalFlags(updateTicketStateDto, id);
 
       const updatedTicketState =
         await this.ticketStateRepository.save(ticketState);
@@ -194,10 +290,7 @@ export class TicketStateService {
 
       return updatedTicketState;
     } catch (error) {
-      console.error('Error in update:', error);
-      throw new InternalServerErrorException(
-        'Could not update the ticket state.',
-      );
+      this.handleError(error, 'No se pudo actualizar el estado del ticket.');
     }
   }
 
@@ -215,10 +308,63 @@ export class TicketStateService {
       await this.cacheManager.delCache(`ticketState:${id}`);
       await this.cacheManager.delCache(`ticketStates:*`);
     } catch (error) {
-      console.error('Error in remove:', error);
-      throw new InternalServerErrorException(
-        'Could not delete the ticket state.',
-      );
+      this.handleError(error, 'No se pudo eliminar el estado del ticket.');
     }
+  }
+
+  
+
+private async validatePreapprovalFlags(dto: CreateTicketStateDto | UpdateTicketStateDto, id?: string): Promise<void> {
+  if (dto.isInitialPreapproval && dto.isRejectedPreapproval) {
+    throw new BadRequestException(
+      'Un estado no puede ser marcado como inicial y rechazado al mismo tiempo.',
+    );
+  }
+
+  if (dto.isInitialPreapproval) {
+    const where: any = {
+      isInitialPreapproval: true,
+      state: true,
+    };
+    if (id) where.id = Not(id);
+
+    const existing = await this.ticketStateRepository.findOne({ where });
+    if (existing) {
+      throw new ConflictException('Ya existe un estado marcado como inicial de preaprobación.');
+    }
+  }
+
+  if (dto.isRejectedPreapproval) {
+    const where: any = {
+      isRejectedPreapproval: true,
+      state: true,
+    };
+    if (id) where.id = Not(id);
+
+    const existing = await this.ticketStateRepository.findOne({ where });
+    if (existing) {
+      throw new ConflictException('Ya existe un estado marcado como rechazado en preaprobación.');
+    }
+  }
+}
+
+
+   private handleError(error: unknown, context: string): never {
+    // Errores conocidos que deben propagarse sin modificar
+    const knownErrors = [
+      ConflictException,
+      NotFoundException,
+      BadRequestException,
+      HttpException,
+    ];
+
+    if (knownErrors.some(errorType => error instanceof errorType)) {
+      throw error;
+    }
+
+    console.error(`Error in ${context}:`, error);
+    throw new InternalServerErrorException(
+      context
+    );
   }
 }

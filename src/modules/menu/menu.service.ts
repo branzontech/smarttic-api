@@ -65,7 +65,7 @@ export class MenuService {
             ELSE menu.description 
          END AS description`,
         ])
-        .where('menu.nameView IS NULL')
+        .where('menu.nameView IS NULL OR menu.nameView = \'\'')
         .andWhere('menu.state = true')
         .andWhere('menu.deletedAt IS NULL')
         .getRawMany();

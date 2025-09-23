@@ -7,6 +7,7 @@ import { ResponseInterceptor } from 'src/common/interceptors/response.intercepto
 import { GLOBAL_PREFIX } from 'src/common/constants';
 import { LoggerHelper } from 'src/common/helpers/logger.helper';
 import { json, urlencoded } from 'express';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 
 
 async function bootstrap() {
@@ -14,6 +15,8 @@ async function bootstrap() {
   app.use(json({ limit: '5mb' })); // Aumenta el límite para JSON
   app.use(urlencoded({ extended: true, limit: '5mb' })); // Aumenta el límite para URL-encoded
   
+  app.useWebSocketAdapter(new IoAdapter(app));
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

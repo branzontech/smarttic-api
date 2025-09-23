@@ -43,7 +43,8 @@ export class HttpCatchErrorFilter implements ExceptionFilter {
       data = exception['response']?.message;
     } else {
       // Otros errores
-      data = exception?.message || null;
+      data=null;
+      message = exception?.message || null;
     }
 
     // Registrar el error

@@ -23,6 +23,12 @@ export class TicketState {
   @Column({ nullable: true })
   orderTicket: number; 
 
+  @Column({ default: false })
+  isInitialPreapproval: boolean;
+
+  @Column({ default: false })
+  isRejectedPreapproval: boolean;
+
   @Column({ name: 'state', default: true })
   state: boolean;
 

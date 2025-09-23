@@ -9,7 +9,7 @@ export class EmailService {
   constructor(
     private readonly surveyCalificationService: SurveyCalificationService,
   ) {}
-  // Ruta relativa desde email.service.ts hasta la imagen del logo
+
   private readonly defaultLogoPath = path.join(
     __dirname,
     '..',
@@ -40,7 +40,6 @@ export class EmailService {
       baseUrl?: string;
     } = {},
   ): Promise<void> {
-    // Configuración de valores por defecto
 
     try {
       const baseUrl = options.baseUrl || process.env.FRONTEND_URL;

@@ -1,3 +1,4 @@
+import { AssignedTicketDetailFile } from 'src/modules/assigned-ticket-detail-file/entities/assigned-ticket-detail-file.entity';
 import { Ticket } from 'src/modules/ticket/entities/ticket.entity';
 import { User } from 'src/modules/users/entities/user.entity';
 import {
@@ -33,6 +34,9 @@ export class TicketDetail {
 
   @ManyToOne(() => Ticket, (ticket) => ticket.ticketDetails, { nullable: true, onDelete: 'SET NULL' })
   ticket: Ticket;
+
+  @OneToMany(() => AssignedTicketDetailFile, (assigned) => assigned.ticketDetail)
+  ticketDetailFiles: AssignedTicketDetailFile[];
 
   @CreateDateColumn()
   createdAt: Date;

@@ -27,6 +27,14 @@ import { FormsModule } from './modules/forms/forms.module';
 import { FormFieldsModule } from './modules/form-fields/form-fields.module';
 import { FormResponsesModule } from './modules/form-responses/form-responses.module';
 import { FormResponseFilesModule } from './modules/form-response-files/form-response-files.module';
+import { NoteAgentTicketsModule } from './modules/note-agent-tickets/note-agent-tickets.module';
+import { LaborHoursModule } from './modules/labor-hours/labor-hours.module';
+import { HolidaysModule } from './modules/holidays/holidays.module';
+import { PublicModule } from './modules/public/public.module';
+import { TicketFilesModule } from './modules/ticket-files/ticket-files.module';
+import { AssignedTicketFileModule } from './modules/assigned-ticket-file/assigned-ticket-file.module';
+import { AssignedTicketDetailFileModule } from './modules/assigned-ticket-detail-file/assigned-ticket-detail-file.module';
+import { ShortcutsModule } from './modules/shortcuts/shortcuts.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -57,7 +65,15 @@ import { FormResponseFilesModule } from './modules/form-response-files/form-resp
     FormsModule,
     FormFieldsModule,
     FormResponsesModule,
-    FormResponseFilesModule
+    FormResponseFilesModule,
+    NoteAgentTicketsModule,
+    LaborHoursModule,
+    HolidaysModule,
+    PublicModule,
+    TicketFilesModule,
+    AssignedTicketFileModule,
+    AssignedTicketDetailFileModule,
+    ShortcutsModule
   ],
   controllers: [],
   providers: [

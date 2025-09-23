@@ -9,6 +9,7 @@ import {
   UseGuards,
   Query,
   ParseIntPipe,
+  UseInterceptors,
 } from '@nestjs/common';
 import { TicketDetailService } from './ticket-detail.service';
 import { CreateTicketDetailDto } from './dto/create-ticket-detail.dto';
@@ -21,8 +22,11 @@ import {
   ApiOperation,
   ApiResponse,
   ApiQuery,
+  ApiConsumes,
 } from '@nestjs/swagger';
 import { AuthzGuard } from 'src/common/guards/authz/authz.guard';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { multerOptions } from 'src/common/helpers/file-upload.helper';
 
 @ApiTags('Ticket Details')
 @ApiBearerAuth('access-token')
@@ -32,6 +36,8 @@ export class TicketDetailController {
   constructor(private readonly ticketDetailService: TicketDetailService) {}
 
   @Post()
+  @UseInterceptors(FilesInterceptor('files', 10, multerOptions))
+  @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Create a new ticket detail' })
   @ApiBody({
     description: 'Create a new ticket detail',

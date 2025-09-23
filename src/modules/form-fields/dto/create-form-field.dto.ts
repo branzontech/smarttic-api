@@ -105,7 +105,7 @@ export class CreateFormFieldDto {
     required: false
   })
   @IsString({ message: 'defaultValue debe ser de tipo string' })
-  @IsOptional()
+  @IsOptional() 
   @MaxLength(500, { message: 'defaultValue excede el máximo de 500 caracteres' })
   defaultValue?: string;
 }

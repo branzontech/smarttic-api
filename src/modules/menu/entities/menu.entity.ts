@@ -1,4 +1,5 @@
 import { AssignedMenuRole } from 'src/modules/assigned-menu-role/entities/assigned-menu-role.entity';
+import { Shortcut } from 'src/modules/shortcuts/entities/shortcut.entity';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -43,6 +44,9 @@ export class Menu {
     (assignedMenuRole) => assignedMenuRole.menu,
   )
   assignedMenuRoles: AssignedMenuRole[];
+
+  @OneToMany(() => Shortcut, (shortcut) => shortcut.menu)
+  shortcuts: Shortcut[];
 
   @CreateDateColumn()
   createdAt: Date;

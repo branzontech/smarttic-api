@@ -7,9 +7,10 @@ import { UsersModule } from 'src/modules/users/users.module';
 import { CacheManagerModule } from 'src/common/cache-manager/cache-manager.module';
 import { TicketModule } from '../ticket/ticket.module';
 import { SurveyCalificationModule } from '../survey-calification/survey-calification.module';
+import { WebsocketModule } from 'src/common/websocket/websocket.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([SurveyResponse]), 
+  imports: [TypeOrmModule.forFeature([SurveyResponse]),  WebsocketModule,
   UsersModule,  forwardRef(() => TicketModule), 
   SurveyCalificationModule, CacheManagerModule],
   controllers: [SurveyResponseController],

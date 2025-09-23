@@ -12,6 +12,7 @@ import { UpdateSurveyResponseDto } from 'src/modules/survey-response/dto/update-
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { CACHE_TTL } from 'src/common/constants';
 import { userSession } from 'src/common/types';
+import { WebsocketService } from 'src/common/websocket/websocket.service';
 
 @Injectable()
 export class SurveyResponseService {
@@ -19,6 +20,7 @@ export class SurveyResponseService {
     @InjectRepository(SurveyResponse)
     private readonly surveyResponseRepository: Repository<SurveyResponse>,
     private readonly cacheManager: CacheManagerService,
+    private readonly websocketService: WebsocketService,
   ) {}
 
   async create(
@@ -29,6 +31,7 @@ export class SurveyResponseService {
         where: {
           userId: createSurveyResponseDto.userId,
           surveyCalificationId: createSurveyResponseDto.surveyCalificationId,
+          ticketId: createSurveyResponseDto.ticketId,
         },
       });
   
@@ -40,7 +43,7 @@ export class SurveyResponseService {
   
       const response = this.surveyResponseRepository.create(createSurveyResponseDto);
       const saved = await this.surveyResponseRepository.save(response);
-  
+      this.websocketService.emit('ticket-surverResponse', createSurveyResponseDto);
       await this.cacheManager.delCache('surveyResponses:*');
   
       return saved;
