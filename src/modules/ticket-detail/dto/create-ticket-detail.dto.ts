@@ -1,6 +1,29 @@
-import { IsString, IsBoolean, IsUUID, IsOptional } from 'class-validator';
+import {
+  IsString,
+  IsBoolean,
+  IsUUID,
+  IsOptional,
+  IsNotEmpty,
+  IsNumber,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+class FileInfoDto {
+  @IsString()
+  @IsNotEmpty()
+  fileName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  fileType: string;
+
+  @IsNumber()
+  fileSize: number;
+
+  @IsString()
+  @IsNotEmpty()
+  fileExtension: string;
+}
 export class CreateTicketDetailDto {
   @ApiPropertyOptional({
     description: 'Descripción del detalle del ticket',
@@ -38,4 +61,26 @@ export class CreateTicketDetailDto {
   @IsBoolean({ message: 'state debe ser un valor booleano.' })
   @IsOptional()
   state?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Archivos adjuntos relacionados con el detalle del ticket. Cada archivo debe contener nombre, tipo MIME, tamaño en bytes y extensión.',
+    type: [FileInfoDto],
+    example: [
+      {
+        fileName: 'captura-error.png',
+        fileType: 'image/png',
+        fileSize: 204800,
+        fileExtension: '.png',
+      },
+      {
+        fileName: 'reporte.pdf',
+        fileType: 'application/pdf',
+        fileSize: 1048576,
+        fileExtension: '.pdf',
+      },
+    ],
+  })
+  @IsOptional()
+  infoFiles?: FileInfoDto[];
 }

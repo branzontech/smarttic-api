@@ -1,6 +1,8 @@
+import { AssignedTicketFile } from 'src/modules/assigned-ticket-file/entities/assigned-ticket-file.entity';
 import { AssignedUserTicket } from 'src/modules/assigned-user-ticket/entities/assigned-user-ticket.entity';
 import { Branch } from 'src/modules/branch/entities/branch.entity';
 import { FormResponse } from 'src/modules/form-responses/entities/form-response.entity';
+import { NoteAgentTicket } from 'src/modules/note-agent-tickets/entities/note-agent-ticket.entity';
 import { SurveyResponse } from 'src/modules/survey-response/entities/survey-response.entity';
 import { TicketDetail } from 'src/modules/ticket-detail/entities/ticket-detail.entity';
 import { TicketState } from 'src/modules/ticket-state/entities/ticket-state.entity';
@@ -62,18 +64,24 @@ export class Ticket {
   @OneToMany(() => TicketDetail, (TicketDetail) => TicketDetail.ticket)
   ticketDetails: TicketDetail[];
 
-  @OneToMany(() => SurveyResponse, (surveyResponse) => surveyResponse.surveyCalification)
+  @OneToMany(() => SurveyResponse, (surveyResponse) => surveyResponse.ticket)
   surveyResponses: SurveyResponse[];
 
   @OneToMany(() => AssignedUserTicket, (assignedUserTicket) => assignedUserTicket.ticket)
   assignedUsers: AssignedUserTicket[];
 
+  @OneToMany(() => NoteAgentTicket, (noteAgentTicket) => noteAgentTicket.ticket)
+  notes: NoteAgentTicket[];
+
   @ManyToOne(() => Branch, (branch) => branch.tickets, { nullable: true, onDelete: 'SET NULL' })
   branch?: Branch;
 
   @OneToOne(() => FormResponse, (formResponse) => formResponse.ticket)
-  @JoinColumn() // Indica que FormResponse guardará el ticketId como FK
+  @JoinColumn() 
   formResponse: FormResponse;
+
+  @OneToMany(() => AssignedTicketFile, (assigned) => assigned.ticket)
+  ticketFiles: AssignedTicketFile[];
 
   @CreateDateColumn()
   createdAt: Date;

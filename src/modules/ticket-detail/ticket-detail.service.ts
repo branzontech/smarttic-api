@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   InternalServerErrorException,
+  HttpException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -15,6 +16,9 @@ import { TicketStateService } from '../ticket-state/ticket-state.service';
 import { TicketService } from '../ticket/ticket.service';
 import { UsersService } from '../users/users.service';
 import { EmailService } from 'src/common/email/email.service';
+import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
+import { AssignedTicketDetailFile } from '../assigned-ticket-detail-file/entities/assigned-ticket-detail-file.entity';
+import { WebsocketService } from 'src/common/websocket/websocket.service';
 
 @Injectable()
 export class TicketDetailService {
@@ -23,6 +27,11 @@ export class TicketDetailService {
     private readonly ticketDetailRepository: Repository<TicketDetail>,
     @InjectRepository(Ticket)
     private readonly ticketRepository: Repository<Ticket>,
+    @InjectRepository(TicketFile)
+    private readonly ticketFile: Repository<TicketFile>,
+    @InjectRepository(AssignedTicketDetailFile)
+    private readonly assignedTicketDetailFile: Repository<AssignedTicketDetailFile>, 
+    private readonly websocketService: WebsocketService,    
     private readonly ticketStateService: TicketStateService,
     private readonly ticketService: TicketService,
     private readonly userService: UsersService,
@@ -67,6 +76,37 @@ export class TicketDetailService {
         createTicketDetailDto,
       );
       const savedDetail = await queryRunner.manager.save(detail);
+      let infoFiles: any[] = [];
+      if (createTicketDetailDto.infoFiles) {
+        try {
+          if (typeof createTicketDetailDto.infoFiles === "string") {
+            infoFiles = JSON.parse(createTicketDetailDto.infoFiles);
+          } else {
+            infoFiles = createTicketDetailDto.infoFiles;
+          }
+        } catch (err) {
+          console.error("Error parseando infoFiles:", err);
+          infoFiles = [];
+        }
+      }
+
+      if (infoFiles.length > 0) {
+        for (const fileInfo of infoFiles) {
+          const ticketFile = this.ticketFile.create({
+            fileName: fileInfo.fileName,
+            fileType: fileInfo.fileType,
+            fileExtension: fileInfo.fileExtension ?? null,
+            fileSize: fileInfo.fileSize,
+          });
+          await queryRunner.manager.save(ticketFile);
+
+          const assignedTicketFile = this.assignedTicketDetailFile.create({
+            fileId: ticketFile.id,
+            ticketDetailId: savedDetail.id,
+          });
+          await queryRunner.manager.save(assignedTicketFile);
+        }
+      }
 
       const resultData = await this.ticketService.findOne(ticketId);
       const user = await this.userService.findById(resultData.userId);
@@ -75,7 +115,8 @@ export class TicketDetailService {
       }
 
       await queryRunner.commitTransaction();
-
+      this.websocketService.emit('ticketDetail-saved', savedDetail, ticketId); 
+      this.websocketService.emit('tickets-updated', savedDetail);
       let emailStatus = 'Ticket created successfully';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
@@ -194,11 +235,14 @@ export class TicketDetailService {
         cacheKey,
       );
 
-      // if (cached) return cached;
+      if (cached) return cached;
 
-      // 1. Obtener el ticket con relaciones
+      
       const ticket = await this.ticketRepository
         .createQueryBuilder('ticket')
+        .leftJoinAndSelect('ticket.ticketFiles', 'ticketFiles')        
+        .leftJoinAndSelect('ticketFiles.file', 'file')
+        .leftJoinAndSelect('ticket.notes', 'notes')
         .leftJoinAndSelect('ticket.formResponse', 'formResponse')
         .leftJoinAndSelect('formResponse.form', 'form')
         .leftJoinAndSelect('form.fields', 'fields')
@@ -207,9 +251,13 @@ export class TicketDetailService {
         .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
         .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
         .leftJoinAndSelect('ticket.user', 'user')
-        .leftJoinAndSelect('ticket.assignedUsers', 'assignedUsers')
+        .leftJoinAndSelect('ticket.surveyResponses', 'surveyResponses')        
+        .leftJoinAndSelect('surveyResponses.surveyCalification', 'surveyCalification')        
+        .leftJoinAndSelect('ticket.assignedUsers', 'assignedUsers', 'assignedUsers.state = true')
+        .leftJoinAndSelect('user.branch', 'branch')
         .leftJoinAndSelect('assignedUsers.user', 'agent')
-        .where('ticket.id = :ticketId AND assignedUsers.state = true', {
+        // .where('ticket.id = :ticketId AND assignedUsers.state = true', {
+        .where('ticket.id = :ticketId', {
           ticketId,
         })
         .getOne();
@@ -220,25 +268,29 @@ export class TicketDetailService {
         );
       }
 
-      // 2. Obtener los detalles ordenados
+      
       const details = await this.ticketDetailRepository
         .createQueryBuilder('detail')
+        .leftJoinAndSelect('detail.ticketDetailFiles', 'ticketDetailFiles')
+        .leftJoinAndSelect('ticketDetailFiles.file', 'file')
         .leftJoinAndSelect('detail.user', 'user')
+        .leftJoinAndSelect('user.role', 'role')
         .where('detail.ticketId = :ticketId', { ticketId })
         .orderBy('detail.createdAt', 'ASC')
         .getMany();
 
-      // 2. Obtener los detalles ordenados
-      // 3. Formatear el ticket principal
+     
       const formattedTicket: any = {
         id: ticket.id,
         type: 'ticket',
-        description: ticket.description || '',
+        description: ticket.description || `Ver Detalles en formulario : ${ticket.formResponse.form.name}` || '',
         ticketId: ticket.id,
         userId: ticket.user?.id || '',
-        user: ticket.user?.companyname?.trim()
+        userImageName: ticket.user?.profileImageName,
+        userName: ticket.user?.companyname?.trim()
           ? ticket.user.companyname
-          : `${ticket.user?.name || ''} ${ticket.user?.lastname || ''}`.trim(),
+          : `${ticket.user?.name || ''} ${ticket.user?.lastname || ''}`.trim(),  
+        files: ticket.ticketFiles.map(tf => tf.file) || [],
         state: true,
         createdAt: ticket.createdAt,
         updatedAt: ticket.updatedAt,
@@ -251,9 +303,12 @@ export class TicketDetailService {
         description: detail.description,
         ticketId: detail.ticketId,
         userId: detail.user?.id || '',
-        user: detail.user?.companyname?.trim()
+        userImageName: detail.user?.profileImageName,
+        userName: detail.user?.companyname?.trim()
           ? detail.user.companyname
           : `${detail.user?.name || ''} ${detail.user?.lastname || ''}`.trim(),
+        isMessageAgent: detail.user.role.isAgent,
+        files: detail.ticketDetailFiles.map(tf => tf.file) || [],
         state: detail.state,
         createdAt: detail.createdAt,
         updatedAt: detail.updatedAt,
@@ -283,18 +338,18 @@ export class TicketDetailService {
 
       const result = {
         data: {
-          user: ticket.user?.companyname?.trim()
-            ? ticket.user.companyname
-            : `${ticket.user?.name || ''} ${ticket.user?.lastname || ''}`.trim(),
           formResponse: formattedForm,
-          ticketState: ticket.ticketState?.title || '',
+          notes: ticket.notes,
+          user:ticket.user,
+          agent:ticket.assignedUsers && ticket.assignedUsers.length>0 ? ticket.assignedUsers[0].user : null,
+          surveyResponses:ticket.surveyResponses,
+          ticketState: ticket.ticketState,
           ticketStateOrder: ticket.ticketState?.orderTicket || 1,
-          ticketTitle: ticket.ticketTitle?.description || '',
+          ticketTitle: ticket.ticketTitle,
           ticketPriority: ticket.ticketTitle?.ticketPriority.title || '',
-          agent:
-            `${ticket.assignedUsers[0]?.user?.name || ''} ${ticket.assignedUsers[0]?.user?.lastname || ''}`.trim(),
-          agentId: ticket.assignedUsers[0]?.user?.id || '',
           details: [formattedTicket, ...formattedDetails],
+          createdAt: ticket.createdAt,
+          updatedAt: ticket.updatedAt,
         },
       };
 
@@ -302,6 +357,9 @@ export class TicketDetailService {
       return result;
     } catch (error) {
       console.error('Error en findTicketAndDetailsById:', error);
+      if (error instanceof HttpException) {
+        throw error;
+      }
       throw new InternalServerErrorException(
         'No se pudo obtener el ticket con sus detalles.',
       );

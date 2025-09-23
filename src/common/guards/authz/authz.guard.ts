@@ -26,7 +26,7 @@ export class AuthzGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const token = extractTokenFromHeader(request);
     if (!token) {
-      throw new UnauthorizedException('Token is missing');
+      throw new UnauthorizedException('Token no encontrado');
     }
 
     let payload: any;
@@ -35,7 +35,7 @@ export class AuthzGuard implements CanActivate {
         secret: process.env.SECRET_KEY, 
       });
     } catch (error) {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw new UnauthorizedException('Token invalido o expirado');
     }
 
     const userId = payload.sub;
@@ -46,12 +46,12 @@ export class AuthzGuard implements CanActivate {
       // 🔹 Intentamos recuperar el usuario desde la BD si no está en cache
       user = await this.userRepository.findOne({
         where: { id: userId },
-        relations: ['role', 'role.permissions', 'assignedBranches',
+        relations: ['shortcuts', 'role', 'role.permissions', 'assignedBranches',
     'assignedBranches.branch',],
       });
 
       if (!user) {
-        throw new ForbiddenException('User not found');
+        throw new ForbiddenException('Usuario no encontrado');
       }
 
       const sessionTTL = Number(process.env.CACHE_SESSION_TTL) || 3600;
@@ -66,6 +66,9 @@ export class AuthzGuard implements CanActivate {
       companyname: user.companyname,
       companyId: user.companyId,
       branchId: user.branchId,
+      isDesignatedApprover: user.isDesignatedApprover,
+      profileImageName: user.profileImageName,
+      shortcuts:user.shortcuts.map(s=>s.menuId),
       branches: user.assignedBranches?.map((assigned) => ({
         id: assigned.branch.id,
         name: assigned.branch.name,
@@ -87,13 +90,8 @@ export class AuthzGuard implements CanActivate {
    
     request['user'] = mappedUser;
 
-    // ✅ Validar permisos del usuario
     const { method, route } = request;
     const endpoint = route.path;
-    
-    const hasPermission_ = user.role.permissions.some(
-      (perm) => perm.endpoint === endpoint && perm.methods.includes(method)
-    );
 
     const hasPermission = user.role.permissions.some((perm) => {
       const basePath = perm.endpoint.includes("/:id") ? perm.endpoint.split('/:id')[0] : perm.endpoint;
@@ -104,7 +102,7 @@ export class AuthzGuard implements CanActivate {
     });
     
     if (!hasPermission && !user.role.isConfigurator) {
-      throw new ForbiddenException('Access denied: insufficient permissions');
+      throw new ForbiddenException('Acceso denegado: No tiene permisos para esta acción');
     }
 
     return true;

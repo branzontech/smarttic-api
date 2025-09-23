@@ -7,8 +7,10 @@ import {
   IsBoolean,
   IsNumber,
   IsArray,
+  Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 
 export class CreateUserDto {
   @ApiPropertyOptional({
@@ -66,6 +68,7 @@ export class CreateUserDto {
     required: false,
   })
   @IsOptional()
+  @Transform(({ value }) => Number(value))
   @IsNumber({}, { message: 'The phone must be a number.' })
   phone?: number;
 
@@ -85,8 +88,9 @@ export class CreateUserDto {
     minLength: 6,
     required: true,
   })
+  @IsOptional()
   @IsString({ message: 'The username must be a string.' })
-  @MinLength(6, { message: 'The username must be at least 6 characters long.' })
+  // @MinLength(6, { message: 'The username must be at least 6 characters long.' })
   username: string;
 
   @ApiProperty({
@@ -136,6 +140,12 @@ export class CreateUserDto {
     required: false,
   })
   @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value.trim(); // UUID como string
+    }
+    return value;
+  })
   @IsUUID('4', { message: 'The branchId must be a valid UUID.' })
   branchId?: string;
 
@@ -149,7 +159,23 @@ export class CreateUserDto {
     required: false,
   })
   @IsOptional()
-  @IsArray()
+  @Transform(({ value }) => {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {
+        return value.split(',').map((v: string) => v.trim());
+      }
+    }
+    return [];
+  })
+  @IsArray({ message: 'branches must be an array.' })
   @IsUUID('4', { each: true, message: 'Each branch ID must be a valid UUID.' })
   branches?: string[];
 
@@ -160,8 +186,56 @@ export class CreateUserDto {
     required: false,
   })
   @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
   @IsBoolean({ message: 'The isAgentDefault must be a boolean.' })
   isAgentDefault?: boolean;
+
+  @ApiProperty({
+    description: 'Limit of tickets that the agent can manage',
+    type: Number,
+    example: 10,
+  })
+  @IsOptional()
+  @Transform(({ value }) => Number(value))
+  @IsNumber({}, { message: 'The limit must be a number.' })
+  @Min(0, { message: 'The ticket limit cannot be negative.' })
+  limite_ticket: number;
+
+  @ApiProperty({
+    description: 'Edad del usuarios',
+    type: Number,
+    example: 25,
+  })
+  @IsOptional()
+  @Transform(({ value }) => Number(value))
+  @IsNumber({}, { message: 'Tla edad debe se run numero' })
+  @Min(0, { message: 'la edad no debe ser negativo.' })
+  age: number;
+
+  @IsOptional()
+  @IsString()
+  profileImageName?: string;
+
+  @ApiPropertyOptional({
+    description: 'Indicates whether the user is the designated approving usuario',
+    type: Boolean,
+    example: false,
+    required: false,
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
+  @IsBoolean({
+    message: 'The isDesignatedApprover field must be a boolean value.',
+  })
+  isDesignatedApprover?: boolean;
 
   @ApiPropertyOptional({
     description: 'The state of the user',
@@ -172,5 +246,6 @@ export class CreateUserDto {
   })
   @IsOptional()
   @IsBoolean({ message: 'The state must be a boolean.' })
+  @Transform(({ value }) => value === 'true' || value === true)
   state?: boolean;
 }

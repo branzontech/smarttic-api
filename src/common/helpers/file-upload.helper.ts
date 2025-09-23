@@ -22,7 +22,7 @@ export const multerStorage = diskStorage({
     });
   },
   filename: (_req, file, cb) => {
-    // Usar el nombre original que viene del frontend
+
     cb(null, file.originalname);
   },
 });
@@ -30,23 +30,26 @@ export const multerStorage = diskStorage({
 export const multerOptions = {
   storage: multerStorage,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB (ajusta según necesites)
+    fileSize: 50 * 1024 * 1024, 
   },
   fileFilter: (req, file, cb) => {
     const allowedMimeTypes = [
-      // Imágenes
+
       'image/jpeg',
       'image/png',
       'image/gif',
       
-      // Documentos
       'application/pdf',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       
-      // Excel
+      
       'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+
+      'application/zip',
+      'application/x-zip-compressed',
+      'application/x-rar-compressed',
     ];
 
     if (allowedMimeTypes.includes(file.mimetype)) {

@@ -26,7 +26,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Successful login', schema: { type: 'object', properties: { accessToken: { type: 'string' } } } })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async login(@Body() logInDto: LogInDto) {
-    return await this.authService.logIn(logInDto.username, logInDto.password);
+    return await this.authService.logIn(logInDto.email, logInDto.password);
   }
 
   @Post('refresh')

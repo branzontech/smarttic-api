@@ -139,7 +139,6 @@ export class FormsService {
     await queryRunner.startTransaction();
 
     try {
-      // 1. Obtener formulario existente
       const form = await queryRunner.manager.findOne(Form, {
         where: { id },
         relations: ['fields', 'titles'],
@@ -149,35 +148,53 @@ export class FormsService {
         throw new NotFoundException(`Formulario con ID ${id} no encontrado`);
       }
 
-      // 2. Validar nombre único si cambió
       if (updateFormDto.name && updateFormDto.name !== form.name) {
         await this.validateUniqueName(updateFormDto.name, queryRunner);
       }
 
-      // 3. Actualizar propiedades básicas
       Object.assign(form, {
         name: updateFormDto.name ?? form.name,
         description: updateFormDto.description ?? form.description,
         isActive: updateFormDto.isActive ?? form.isActive,
       });
+      
 
-      // 4. Actualizar campos si se proporcionan
       if (updateFormDto.fields) {
         await queryRunner.manager.delete(FormField, { form: { id } });
-        await this.createFormFields(id, updateFormDto.fields, queryRunner);
+
+        const newFields = updateFormDto.fields.map((field) => ({
+          ...field,
+          form: { id },
+        }));
+        await queryRunner.manager.save(FormField, newFields);
+        
+        form.fields = newFields as any;
       }
 
-      // 5. Actualizar categorías (solo para formularios no templates)
-      if (!form.isTemplate && updateFormDto.titles) {
-        await this.clearTitleAssignments(id, queryRunner);
-        await this.assignToTitles(
-          id,
-          updateFormDto.titles,
-          queryRunner,
+      
+      if (updateFormDto.titles) {
+        const updatedTitles = await queryRunner.manager.find(TicketTitle, {
+          where: { id: In(updateFormDto.titles) },
+          relations: ['form'],
+        });
+
+        const conflicted = updatedTitles.filter(
+          (t) => t.form && t.form.id !== id,
         );
+
+        if (conflicted.length > 0) {
+          throw new ConflictException(
+            `Títulos ya asignados: ${conflicted.map(t => t.id).join(', ')}`
+          );
+        }
+
+        for (const t of updatedTitles) {
+          t.form = { id } as any;
+        }
+
+        form.titles = updatedTitles; 
       }
 
-      // 6. Guardar cambios
       await queryRunner.manager.save(Form, form);
       await queryRunner.commitTransaction();
 
@@ -205,15 +222,23 @@ export class FormsService {
         throw new NotFoundException(`Formulario con ID ${id} no encontrado`);
       }
 
+      // Romper relación con TicketTitles (poner formId en null)
       if (form.titles?.length > 0) {
-        throw new BadRequestException(
-          'No se puede eliminar un formulario asignado a títules',
-        );
+        for (const title of form.titles) {
+          await queryRunner.manager.update(
+            TicketTitle,
+            { id: title.id },
+            { form: null }
+          );
+        }
       }
 
-      // Eliminar campos primero por la relación CASCADE
-      await queryRunner.manager.delete(FormField, { form: { id } });
+      // Eliminar campos relacionados (por cascada también puede aplicar si usas cascade)
+      // await queryRunner.manager.delete(FormField, { form: { id } });
+
+      // Eliminado suave del formulario
       await queryRunner.manager.softDelete(Form, { id });
+
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -264,7 +289,7 @@ export class FormsService {
     titleIds: string[],
     queryRunner: any,
   ): Promise<void> {
-    // Validar que las categorías existan
+    // Validar que las títulos existan
     const titles = await queryRunner.manager.find(TicketTitle, {
       where: { id: In(titleIds) },
       relations: ['form'],
@@ -275,17 +300,17 @@ export class FormsService {
         (id) => !titles.some((c) => c.id === id),
       );
       throw new NotFoundException(
-        `Categorías no encontradas: ${missingIds.join(', ')}`,
+        `titulos no ecnontrados: ${missingIds.join(', ')}`,
       );
     }
 
-    // Verificar que ninguna categoría ya tenga formulario asignado
+    // Verificar que ninguna título ya tenga formulario asignado
     const conflictedTitles = titles.filter(
       (c) => c.form && c.form.id !== formId,
     );
     if (conflictedTitles.length > 0) {
       throw new ConflictException(
-        `Las siguientes categorías ya tienen un formulario asignado: ${conflictedTitles.map((c) => c.id).join(', ')}`,
+        `Los siguientes títulos ya tienen un formulario asignado: ${conflictedTitles.map((c) => c.name).join(', ')}`,
       );
     }
 
@@ -297,16 +322,6 @@ export class FormsService {
     );
   }
 
-  private async clearTitleAssignments(
-    formId: string,
-    queryRunner: any,
-  ): Promise<void> {
-    await queryRunner.manager.update(
-      TicketTitle,
-      { form: { id: formId } },
-      { form: null },
-    );
-  }
 
   private async validateUniqueName(
     name: string,
@@ -326,7 +341,7 @@ export class FormsService {
   private async getFormWithDetails(id: string): Promise<Form> {
     const form = await this.formRepository.findOne({
       where: { id },
-      relations: ['fields', 'titles'],
+      relations: ['fields', 'titles', 'titles.ticketCategory'],
       order: { fields: { order: 'ASC' } },
     });
 
@@ -336,6 +351,7 @@ export class FormsService {
 
     return {
       ...form,
+      ticketCategoryId:form.titles[0]?.ticketCategory.id,
       titles: form.titles?.map((cat) => cat.id) ?? [],
     } as any;
   }

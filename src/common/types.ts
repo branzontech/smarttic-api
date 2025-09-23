@@ -16,6 +16,9 @@ export type userSession = {
   companyname: string;
   companyId: string;
   branchId: string;
+  isDesignatedApprover: boolean;
+  profileImageName: string;
+  shortcuts: string[];
   branches?: userSessionBranch[] | null;
   role: {
     id: string;
@@ -38,4 +41,13 @@ export type DashboardChartGroupBar = {
   description: string;
   categories: string[];
   series: { name: string; data: number[] }[];
+};
+
+export type columnDataFilter = {
+  id: string; 
+  value: string
+};
+export type columnDataOrder = {
+  id: string; 
+  desc: boolean
 };

@@ -6,7 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, SelectQueryBuilder } from 'typeorm';
+import { EntityManager, Repository, SelectQueryBuilder } from 'typeorm';
 import { CacheManagerService } from 'src/common/cache-manager/cache-manager.service';
 import { Ticket } from './entities/ticket.entity';
 import { CreateTicketDto } from './dto/create-ticket.dto';
@@ -14,23 +14,33 @@ import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { CACHE_TTL } from 'src/common/constants';
 import { TicketStateService } from '../ticket-state/ticket-state.service';
 import { EmailService } from 'src/common/email/email.service';
-import { userSession, DashboardChartGroupBar } from 'src/common/types';
+import {
+  userSession,
+  DashboardChartGroupBar,
+  columnDataFilter,
+  columnDataOrder,
+} from 'src/common/types';
 import { UsersService } from '../users/users.service';
 import { AssignedUserTicket } from '../assigned-user-ticket/entities/assigned-user-ticket.entity';
 import { SurveyResponse } from '../survey-response/entities/survey-response.entity';
-import { TicketDetail } from '../ticket-detail/entities/ticket-detail.entity';
 import { FormResponse } from '../form-responses/entities/form-response.entity';
 import { FormResponseFile } from '../form-response-files/entities/form-response-file.entity';
+import { TicketState } from '../ticket-state/entities/ticket-state.entity';
+import { User } from '../users/entities/user.entity';
+import { TicketTitleService } from '../ticket-title/ticket-title.service';
+import { NoteAgentTicket } from '../note-agent-tickets/entities/note-agent-ticket.entity';
+import { calculateBusinessMinutesBetweenDates } from '../../common/helpers/business-time.util';
+import { LaborHoursService } from '../labor-hours/labor-hours.service';
+import { HolidaysService } from '../holidays/holidays.service';
+import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
+import { AssignedTicketFile } from '../assigned-ticket-file/entities/assigned-ticket-file.entity';
+import { WebsocketService } from 'src/common/websocket/websocket.service';
 
 @Injectable()
 export class TicketService {
   constructor(
     @InjectRepository(Ticket)
     private readonly ticketRepository: Repository<Ticket>,
-    @InjectRepository(TicketDetail)
-    private readonly ticketDetailRepository: Repository<TicketDetail>,
-    private readonly cacheManager: CacheManagerService,
-    private readonly ticketStateService: TicketStateService,
     @InjectRepository(AssignedUserTicket)
     private readonly assignedUserTicketRepository: Repository<AssignedUserTicket>,
     @InjectRepository(SurveyResponse)
@@ -39,8 +49,18 @@ export class TicketService {
     private readonly formResponseRepository: Repository<FormResponse>,
     @InjectRepository(FormResponseFile)
     private readonly formResponseFilesRepository: Repository<FormResponseFile>,
+    @InjectRepository(TicketFile)
+    private readonly ticketFile: Repository<TicketFile>,
+    @InjectRepository(AssignedTicketFile)
+    private readonly assignedTicketFile: Repository<AssignedTicketFile>,
+    private readonly websocketService: WebsocketService,
     private readonly userService: UsersService,
     private readonly emailService: EmailService,
+    private readonly cacheManager: CacheManagerService,
+    private readonly ticketStateService: TicketStateService,
+    private readonly ticketTitleService: TicketTitleService,
+    private readonly laborHoursService: LaborHoursService,
+    private readonly holidaysService: HolidaysService,
   ) {}
 
   async create(
@@ -55,25 +75,53 @@ export class TicketService {
 
     try {
       if (!user?.id) throw new BadRequestException('Usuario no autenticado');
+      if (!createTicketDto.ticketTitleId) {
+        throw new BadRequestException('El título del ticket es obligatorio');
+      }
 
-      const [ticketState, agentDefault] = await Promise.all([
-        this.ticketStateService.findByOrder(1),
-        this.userService.findDefaultAgent(user.branchId),
+      const manager = queryRunner.manager;
+
+      const [firstState, initialState, lastState] = await Promise.all([
+        this.ticketStateService.findFirstTicketState(manager),
+        this.ticketStateService.findInitialPreapprovalTicketState(manager),
+        this.ticketStateService.findLastTicketState(manager),
       ]);
 
-      if (!ticketState)
+      if (!firstState) {
         throw new NotFoundException(
           'No se encontró el estado inicial del ticket',
         );
-      if (!createTicketDto.ticketTitleId)
-        throw new BadRequestException('El título del ticket es obligatorio');
+      }
+
+      const hasPreapprovalInCategory =
+        await this.ticketTitleService.hasPreapprovalInCategory(
+          createTicketDto.ticketTitleId,
+          manager,
+        );
 
       const branchId =
-        user.role.isAdmin || user.role.isConfigurator
+        user.role.isAdmin || user.role.isConfigurator || user.role.isAgent
           ? createTicketDto.branchId
           : user.branchId;
-      if (!branchId)
+
+      if (!branchId) {
         throw new BadRequestException('El ticket no tiene sucursal asignada');
+      }
+
+      let selectedAgent: User | null = null;
+
+      if (hasPreapprovalInCategory) {
+        selectedAgent = await this.userService.findDesignatedApproverAgent(
+          branchId,
+          manager,
+        );
+      } else {
+        selectedAgent = await this.agentAssigned(
+          branchId,
+          lastState.id,
+          manager,
+        );
+      }
 
       const {
         formResponse: formResponseData,
@@ -81,22 +129,29 @@ export class TicketService {
         ...ticketBaseData
       } = createTicketDto;
 
-      const ticketData = {
+      const ticket = this.ticketRepository.create({
         ...ticketBaseData,
         userId: user.id,
-        branchId: branchId,
-        ticketStateId: ticketState.id,
-      };
+        branchId,
+        ticketStateId: hasPreapprovalInCategory
+          ? initialState.id
+          : firstState.id,
+      });
 
-      const newTicket = this.ticketRepository.create(ticketData);
-      const savedTicket = await queryRunner.manager.save(newTicket);
+      const savedTicket = await manager.save(ticket);
 
-      if (formResponseData) {
+      if (
+        formResponseData &&
+        formResponseData.formId?.trim() &&
+        formResponseData.responses &&
+        Object.keys(formResponseData.responses).length > 0
+      ) {
         const formResponse = this.formResponseRepository.create({
           ...formResponseData,
           ticketId: savedTicket.id,
         });
-        await queryRunner.manager.save(formResponse);
+
+        await manager.save(formResponse);
 
         if (files?.length > 0) {
           for (const file of files) {
@@ -107,32 +162,55 @@ export class TicketService {
               originalName: file.originalname,
             });
 
-            await queryRunner.manager.save(fileEntity);
+            await manager.save(fileEntity);
           }
         }
 
         savedTicket.formResponse = formResponse;
-        await queryRunner.manager.save(Ticket, savedTicket);
+        await manager.save(Ticket, savedTicket);
       }
 
-      const assignedUserId = user.role.isAgent ? user.id : agentDefault?.id;
+      if (createTicketDto.files?.length > 0) {
+        for (const fileInfo of createTicketDto.files) {
+          const ticketFile = this.ticketFile.create({
+            fileName: fileInfo.fileName,
+            fileType: fileInfo.fileType,
+            fileExtension: fileInfo.fileExtension,
+            fileSize: fileInfo.fileSize,
+          });
+          await manager.save(ticketFile);
+
+          const assignedTicketFile = this.assignedTicketFile.create({
+            fileId: ticketFile.id,
+            ticketId: savedTicket.id,
+          });
+          await manager.save(assignedTicketFile);
+        }
+      }
+
+      const assignedUserId = user.role.isAgent ? user.id : selectedAgent?.id;
+
       if (assignedUserId) {
         const assigned = this.assignedUserTicketRepository.create({
           userId: assignedUserId,
           ticketId: savedTicket.id,
         });
-        await queryRunner.manager.save(assigned);
+        await manager.save(assigned);
       }
 
       await queryRunner.commitTransaction();
 
       const resultData = await this.findOne(savedTicket.id);
-
+      this.websocketService.emit('ticket-saved', resultData);
       let emailStatus = 'Ticket creado exitosamente';
+      const emailErrors: string[] = [];
+
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
-          ticketState: ticketState.description,
+          ticketState: hasPreapprovalInCategory
+            ? initialState.description
+            : firstState.description,
           prefix: resultData.ticketTitle.ticketCategory.prefix,
           ticketId: resultData.id,
           ticketNumber: resultData.ticketNumber,
@@ -142,41 +220,84 @@ export class TicketService {
           ticketCreatedAt: resultData.createdAt,
         };
 
-        await this.emailService.sendEmail(
-          user.email,
-          `${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-          'email-template-open.html',
-          emailData,
-        );
-        if (agentDefault.email) {
-          const company = await this.userService.findById(user.companyId);
-          emailData['fullname'] =
-            agentDefault.name + ' ' + agentDefault.lastname;
+        const templace_email = hasPreapprovalInCategory
+          ? 'email-template-pending.html'
+          : 'email-template-open.html';
+
+        // Envío al usuario
+        try {
           await this.emailService.sendEmail(
-            `${agentDefault.email},${company.email}`,
-            `Asignacion ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            'email-template-assigned.html',
+            user.email,
+            `${emailData.prefix}-${resultData.ticketNumber}`,
+            templace_email,
             emailData,
+          );
+        } catch (userEmailError) {
+          console.error('Error al enviar correo al usuario:', userEmailError);
+          emailErrors.push(
+            `Usuario (${user.email}): ${userEmailError.message}`,
           );
         }
 
-        if (!agentDefault.email && user.companyId) {
-          const company = await this.userService.findById(user.companyId);
-          if (company.email) {
+        const company = user.companyId
+          ? await this.userService.findCompanyById(user.companyId)
+          : null;
+
+        try {
+          if (selectedAgent?.email) {
+            emailData.fullname = `${selectedAgent.name} ${selectedAgent.lastname}`;
+            const recipients = `${selectedAgent.email}${company?.email ? ',' + company.email : ''}`;
+
             await this.emailService.sendEmail(
-              company.email,
-              `Asignacion ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+              recipients,
+              `Asignación ${emailData.prefix}-${resultData.ticketNumber}`,
               'email-template-assigned.html',
               emailData,
             );
           }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo al agente o empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Agente: ${agentEmailError.message}`);
+        }
+
+        try {
+          if (company?.email) {
+            await this.emailService.sendEmail(
+              company.email,
+              `Asignación ${emailData.prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned.html',
+              emailData,
+            );
+          }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo al agente o empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Empresa: ${agentEmailError.message}`);
+        }
+
+        if (emailErrors.length > 0) {
+          emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
         }
       } catch (emailError) {
-        emailStatus =
-          'El ticket se creó correctamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico.';
+        console.error(
+          'Error general en bloque de envío de correos:',
+          emailError,
+        );
+        if (emailErrors.length > 0) {
+          emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
       }
 
-      await this.cacheManager.delCache(`tickets:*`);
+      await this.cacheManager.delCache('tickets:*');
 
       return {
         data: resultData,
@@ -184,14 +305,16 @@ export class TicketService {
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();
+
       if (
         error instanceof BadRequestException ||
         error instanceof NotFoundException
       ) {
         throw error;
       }
+
       throw new InternalServerErrorException(
-        `Se produjo un error al crear el ticket: ${error?.message || 'Unexpected error'}`,
+        `Se produjo un error al crear el ticket: ${error?.message || 'Error inesperado'}`,
       );
     } finally {
       await queryRunner.release();
@@ -200,14 +323,18 @@ export class TicketService {
 
   async findAll(
     user: userSession,
-    skip: number = 0,
-    take: number = 10,
-    filter?: string,
+    search?: string,
+    stateId?: string,
+    priorityId?: string,
+    branchId?: string,
+    startDate?: string,
+    endDate?: string,
   ) {
     try {
       const { isAdmin, isAgent, isConfigurator } = user.role;
       const isClient = !isAdmin && !isAgent && !isConfigurator;
-      const cacheKey = `tickets:userId:${user.id}:skip:${skip}:take:${take}:filter:${filter || ''}`;
+      const cacheKey = `tickets:userId:${user.id}:search:${search}:stateId:${stateId}
+      :priorityId:${priorityId}:branchId:${branchId}:startDate:${startDate}:endDate:${endDate}`;
       const cachedData = await this.cacheManager.getCache<{
         data: Ticket[];
         total: number;
@@ -217,6 +344,11 @@ export class TicketService {
 
       const queryBuilder = this.ticketRepository
         .createQueryBuilder('ticket')
+        .leftJoinAndSelect('ticket.surveyResponses', 'surveyResponses')
+        .leftJoinAndSelect(
+          'surveyResponses.surveyCalification',
+          'surveyCalification',
+        )
         .leftJoinAndSelect('ticket.formResponse', 'formResponse')
         .leftJoinAndSelect('formResponse.form', 'form')
         .leftJoinAndSelect('ticket.ticketState', 'ticketState')
@@ -225,17 +357,23 @@ export class TicketService {
         .leftJoinAndSelect('ticket.branch', 'branch')
         .leftJoinAndSelect('user.company', 'company')
         .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
-        .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
-        .leftJoinAndSelect(
+        .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority');
+
+      if (user.isDesignatedApprover) {
+        queryBuilder.leftJoinAndSelect('ticket.assignedUsers', 'assignedUsers');
+      } else {
+        queryBuilder.leftJoinAndSelect(
           'ticket.assignedUsers',
           'assignedUsers',
           'assignedUsers.state = true',
-        )
-        .leftJoinAndSelect('assignedUsers.user', 'agent');
+        );
+      }
+      queryBuilder.leftJoinAndSelect('assignedUsers.user', 'agent');
 
       // Filtro por rol
       if (!isConfigurator) {
         if (isClient) {
+          queryBuilder.andWhere('ticketState.isInitialPreapproval = false ');
           queryBuilder.andWhere('ticket.userId = :userId', { userId: user.id });
         }
         if (isAgent) {
@@ -251,38 +389,78 @@ export class TicketService {
       }
 
       // Filtro por texto de búsqueda
-      if (filter) {
+      if (search) {
         const conditions: string[] = [];
 
         // Campos visibles por todos
         conditions.push(
-          `CONCAT(ticketCategory.prefix,'-', "ticket"."ticketNumber") ILIKE :filter`,
-          'ticketTitle.description ILIKE :filter',
-          'ticketPriority.title ILIKE :filter',
-          'ticketState.title ILIKE :filter',
+          `CONCAT(ticketCategory.prefix,'-', "ticket"."ticketNumber") ILIKE :search`,
+          'ticketTitle.description ILIKE :search',
+          'ticketPriority.title ILIKE :search',
+          'ticketState.title ILIKE :search',
+          'agent.name ILIKE :search',
+          'agent.lastname ILIKE :search',
         );
 
         if (!isClient) {
           conditions.push(
-            'user.name ILIKE :filter',
-            'user.lastname ILIKE :filter',
+            'user.name ILIKE :search',
+            'user.lastname ILIKE :search',
           );
         }
 
         if (isConfigurator) {
-          conditions.push('company.companyname ILIKE :filter');
+          conditions.push('company.companyname ILIKE :search');
         }
 
         if (isConfigurator || isAdmin) {
-          conditions.push('branch.name ILIKE :filter');
+          conditions.push('branch.name ILIKE :search');
         }
 
         queryBuilder.andWhere(`(${conditions.join(' OR ')})`, {
-          filter: `%${filter}%`,
+          search: `%${search}%`,
         });
       }
 
-      queryBuilder.orderBy('ticket.createdAt', 'DESC').skip(skip).take(take);
+      // Filtro por estado
+      if (stateId && stateId !== 'all') {
+        let ticketStateId = stateId;
+        let condition = 'ticket.ticketStateId = :ticketStateId';
+        if (stateId === 'active') {
+          const lastState = await this.ticketStateService.findLastTicketState();
+          if (!lastState) {
+            throw new NotFoundException(`Error al encontrar el ultimo estado.`);
+          }
+          ticketStateId = lastState.id;
+          condition = 'ticket.ticketStateId <> :ticketStateId';
+        }
+        queryBuilder.andWhere(condition, { ticketStateId });
+      }
+
+      // Filtro por prioridad
+      if (priorityId) {
+        queryBuilder.andWhere('ticket.ticketPriorityId = :priorityId', {
+          priorityId,
+        });
+      }
+
+      // Filtro por sucursal
+      if (branchId) {
+        queryBuilder.andWhere('ticket.branchId = :branchId', { branchId });
+      }
+
+      // Filtro por rango de fechas
+      if (startDate && endDate) {
+        queryBuilder.andWhere(
+          'ticket.createdAt BETWEEN :startDate AND :endDate',
+          {
+            startDate,
+            endDate,
+          },
+        );
+      }
+
+      queryBuilder.orderBy('ticket."createdAt"', 'DESC');
 
       const [tickets, total] = await queryBuilder.getManyAndCount();
 
@@ -337,6 +515,222 @@ export class TicketService {
     }
   }
 
+  async findAgentApprover(id: string): Promise<Ticket> {
+    try {
+      const cacheKey = `ticket:Agent-Approver-${id}`;
+      let ticket = await this.cacheManager.getCache<Ticket>(cacheKey);
+
+      if (!ticket) {
+        const queryBuilder = this.ticketRepository
+          .createQueryBuilder('ticket')
+          .leftJoinAndSelect(
+            'ticket.assignedUsers',
+            'assignedUsers',
+            'assignedUsers.state = false',
+          )
+          .leftJoinAndSelect(
+            'assignedUsers.user',
+            'agent',
+            'agent.isDesignatedApprover = true',
+          )
+          .where('ticket.id = :id', { id });
+
+        ticket = await queryBuilder.getOne();
+
+        if (!ticket) {
+          throw new NotFoundException(`Ticket con ID '${id}' no encontrado.`);
+        }
+
+        await this.cacheManager.setCache(cacheKey, ticket);
+      }
+
+      return ticket;
+    } catch (error) {
+      console.error('Error en findOne:', error);
+      throw new InternalServerErrorException('No se pudo obtener el ticket.');
+    }
+  }
+
+  async updateStatusToOpen(
+    userSession: userSession,
+    id: string,
+    description: string,
+  ): Promise<{ data: Ticket[]; message: string }> {
+    const queryRunner =
+      this.ticketRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    const updatedTickets: Ticket[] = [];
+    const manager = queryRunner.manager;
+    const emailErrors: { ticketId: string; email: string; error: any }[] = [];
+
+    try {
+      const ticketFirstState =
+        await this.ticketStateService.findFirstTicketState(manager);
+      if (!ticketFirstState) {
+        throw new NotFoundException(`Error al encontrar el primer estado.`);
+      }
+      const firstState =
+        await this.ticketStateService.findFirstTicketState(manager);
+      if (!firstState) {
+        throw new NotFoundException(`Error al encontrar el primer estado.`);
+      }
+
+      const note = manager.create(NoteAgentTicket, {
+        description,
+        userId: userSession.id,
+        ticketId: id,
+      });
+      await manager.save(note);
+
+      const ticket = await manager.preload(Ticket, {
+        id,
+        ticketStateId: ticketFirstState.id,
+      });
+
+      if (!ticket) {
+        throw new NotFoundException(`No se encontró el ticket con ID '${id}'.`);
+      }
+
+      const updatedTicket = await manager.save(ticket);
+
+      const existingAssignment = await manager.findOne(AssignedUserTicket, {
+        where: {
+          userId: userSession.id,
+          ticketId: id,
+        },
+      });
+
+      if (existingAssignment) {
+        existingAssignment.state = false;
+        await manager.save(existingAssignment);
+      }
+      const selectedAgent = await this.agentAssigned(
+        updatedTicket.branchId,
+        firstState.id,
+        manager,
+      );
+      const assignedUserId = selectedAgent?.id;
+      if (assignedUserId) {
+        const assigned = manager.create(AssignedUserTicket, {
+          userId: assignedUserId,
+          ticketId: updatedTicket.id,
+        });
+        await manager.save(assigned);
+      }
+
+      await queryRunner.commitTransaction();
+
+      const resultData = await this.findOne(id);
+      this.websocketService.emit('ticket-toOpen', resultData);
+      const user = await this.userService.findById(resultData.userId);
+
+      const prefix = resultData.ticketTitle.ticketCategory.prefix;
+      const priority = resultData.ticketTitle.ticketPriority.title;
+
+      const emailData = {
+        fullname: `${user.name} ${user.lastname}` || 'User',
+        ticketState: resultData.ticketState.description,
+        prefix,
+        ticketId: resultData.id,
+        userId: user.id,
+        ticketNumber: resultData.ticketNumber,
+        ticketTitle: resultData.ticketTitle.description,
+        ticketPriority: priority,
+        ticketCreatedAt: resultData.createdAt,
+      };
+
+      try {
+        await this.emailService.sendEmail(
+          user.email,
+          `Actualización ${prefix}-${resultData.ticketNumber}`,
+          'email-template-open.html',
+          emailData,
+          true,
+        );
+
+        const lastState =
+          await this.ticketStateService.findLastTicketState(manager);
+        const selectedAgent = await this.agentAssigned(
+          ticket.branchId,
+          lastState.id,
+          manager,
+        );
+
+        if (selectedAgent?.email) {
+          const company = await this.userService.findCompanyById(
+            user.companyId,
+          );
+          emailData.fullname = `${selectedAgent.name} ${selectedAgent.lastname}`;
+
+          await this.emailService.sendEmail(
+            `${selectedAgent.email}${company?.email ? ',' + company.email : ''}`,
+            `Apertura ticket ${prefix}-${resultData.ticketNumber}`,
+            'email-template-assigned.html',
+            emailData,
+          );
+        }
+      } catch (emailError) {
+        console.error(
+          'Error enviando email para ticket:',
+          ticket.id,
+          emailError,
+        );
+        emailErrors.push({
+          ticketId: ticket.id,
+          email: user.email,
+          error: emailError,
+        });
+      }
+
+      await this.cacheManager.delCache(`ticket:${ticket.id}`);
+      // }
+
+      await this.cacheManager.delCache('tickets:*');
+      await this.cacheManager.delCache('notes:*');
+
+      let message = 'Ticket abierto correctamente.';
+
+      // if (emailErrors.length === ids.length) {
+      //   message += ' Sin embargo, **ningún correo fue enviado exitosamente**.';
+      // } else if (emailErrors.length > 0) {
+      //   message += ` Algunos correos **fallaron** (${emailErrors.length}/${ids.length}).`;
+      // }
+
+      // Detallar errores si los hay
+      if (emailErrors.length > 0) {
+        const errorDetails = emailErrors
+          .map(
+            (error) =>
+              `\n- Ticket ID: ${error.ticketId}, Correo: ${error.email}, Motivo: ${error.error.message}`,
+          )
+          .join('');
+        message += '\n\n**Errores de envío:**' + errorDetails;
+      }
+
+      return {
+        data: updatedTickets,
+        message,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      console.error('Error in updateStatusToOpen:', error);
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        `Se produjo un error al crear el ticket: ${error?.message || 'Error inesperado'}`,
+      );
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async updateStatusToInProcess(
     id: string,
   ): Promise<{ data: Ticket; message: string }> {
@@ -344,7 +738,7 @@ export class TicketService {
       // Find the state with order 3
       const ticketState = await this.ticketStateService.findByOrder(2);
       if (!ticketState) {
-        throw new NotFoundException(`State with order '2' not found.`);
+        throw new NotFoundException(`Estado con orden '2' no encontrado.`);
       }
 
       // Preload to update
@@ -354,20 +748,26 @@ export class TicketService {
       });
 
       if (!ticket) {
-        throw new NotFoundException(`Ticket with ID '${id}' not found.`);
+        throw new NotFoundException(`No se encontró el ticket con ID '${id}'.`);
       }
 
       const updatedTicket = await this.ticketRepository.save(ticket);
 
       const user = await this.userService.findById(updatedTicket.userId);
       if (!user) {
-        throw new NotFoundException(`Error finding ticket user.`);
+        throw new NotFoundException(
+          `Error al encontrar el usuario del ticket.`,
+        );
       }
-
       const resultData = await this.findOne(updatedTicket.id);
-      let emailStatus = 'Ticket pass to In Process successfully';
+      this.websocketService.emit('ticket-inProcess', resultData);
+      let emailStatus = 'El ticket fue pasado a EN PROCESO exitosamente';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
+      const emailErrors: string[] = [];
+      const agent = resultData.assignedUsers
+        ? await this.userService.findById(resultData.assignedUsers[0].userId)
+        : null;
 
       try {
         const emailData = {
@@ -380,30 +780,88 @@ export class TicketService {
           ticketPriority: priority,
           ticketCreatedAt: resultData.createdAt,
         };
-
-        await this.emailService.sendEmail(
-          user.email,
-          `Devuelta ${prefix}-${updatedTicket.ticketNumber}`,
-          'email-template.html',
-          emailData,
-        );
-        if (ticket.user) {
-          const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId,
-          );
-          const company = await this.userService.findById(user.companyId);
-          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+        try {
           await this.emailService.sendEmail(
-            `${agent.email},${company.email}`,
-            `Modificacion tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            'email-template-assigned-modify.html',
+            user.email,
+            `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
+            'email-template.html',
             emailData,
           );
+        } catch (userEmailError) {
+          console.error('Error al enviar correo al usuario:', userEmailError);
+          emailErrors.push(
+            `Usuario (${user.email}): ${userEmailError.message}`,
+          );
+        }
+
+        try {
+          const agentApprover = await this.findAgentApprover(updatedTicket.id);
+          if (agentApprover) {
+            const name = agentApprover.assignedUsers[0].user.name;
+            const lastname = agentApprover.assignedUsers[0].user.lastname;
+            const email = agentApprover.assignedUsers[0].user.email;
+            emailData['fullname'] = name + ' ' + lastname;
+            if (email) {
+              await this.emailService.sendEmail(
+                email,
+                `Modificación tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al agente:', agentEmailError);
+          emailErrors.push(`Agente Aprobador: ${agentEmailError.message}`);
+        }
+
+        try {
+          if (agent) {
+            emailData['fullname'] = agent.name + ' ' + agent.lastname;
+
+            if (agent.email) {
+              await this.emailService.sendEmail(
+                agent.email,
+                `Modificación tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo a la empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Agente Asignado: ${agentEmailError.message}`);
+        }
+
+        try {
+          const company = await this.userService.findCompanyById(
+            user.companyId,
+          );
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+          if (company?.email) {
+            await this.emailService.sendEmail(
+              company.email,
+              `Modificación tikect ${emailData.prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned-modify.html',
+              emailData,
+            );
+          }
+        } catch (agentEmailError) {
+          console.error('Error al enviar correo al empresa:', agentEmailError);
+          emailErrors.push(`Empresa: ${agentEmailError.message}`);
         }
       } catch (emailError) {
         console.log(emailError);
-        emailStatus =
-          'Ticket was pass to In Process successfully, but the email notification could not be sent. Please contact Branzon Tech support';
+        if (emailErrors.length > 0) {
+          emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
+        // emailStatus =
+        //   'El ticket fue pasado a EN PROCESO exitosamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico de Branzon.';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -412,9 +870,9 @@ export class TicketService {
         message: emailStatus,
       };
     } catch (error) {
-      console.error('Error in updateStatusToAssisted:', error);
+      console.error('Error in updateStatusToInProces:', error);
       throw new InternalServerErrorException(
-        'Failed to update the ticket status.',
+        'No se pudo actualizar el estado del ticket.',
       );
     }
   }
@@ -424,10 +882,9 @@ export class TicketService {
   ): Promise<{ data: Ticket; message: string }> {
     try {
       // Find the state with order 3
-      console.log('entro');
       const ticketState = await this.ticketStateService.findByOrder(3);
       if (!ticketState) {
-        throw new NotFoundException(`State with order '3' not found.`);
+        throw new NotFoundException(`Estado con orden '3' no encontrado.`);
       }
 
       // Preload to update
@@ -437,21 +894,26 @@ export class TicketService {
       });
 
       if (!ticket) {
-        throw new NotFoundException(`Ticket with ID '${id}' not found.`);
+        throw new NotFoundException(`No se encontró el ticket con ID '${id}'.`);
       }
 
       const updatedTicket = await this.ticketRepository.save(ticket);
 
       const user = await this.userService.findById(updatedTicket.userId);
       if (!user) {
-        throw new NotFoundException(`Error finding ticket user.`);
+        throw new NotFoundException(
+          `Error al encontrar el usuario del ticket.`,
+        );
       }
-
       const resultData = await this.findOne(updatedTicket.id);
-      let emailStatus = 'Ticket pass to Assisted successfully';
+      this.websocketService.emit('ticket-toAssisted', resultData);
+      let emailStatus = 'El ticket atendido exitosamente';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
-
+      const emailErrors: string[] = [];
+      const agent = resultData.assignedUsers
+        ? await this.userService.findById(resultData.assignedUsers[0].userId)
+        : null;
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
@@ -464,29 +926,94 @@ export class TicketService {
           ticketCreatedAt: resultData.createdAt,
         };
 
-        await this.emailService.sendEmail(
-          user.email,
-          `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
-          'email-template.html',
-          emailData,
-        );
-        if (ticket.user) {
-          const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId,
-          );
-          const company = await this.userService.findById(user.companyId);
-          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+        try {
           await this.emailService.sendEmail(
-            `${agent.email},${company.email}`,
-            `Modificacion tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            'email-template-assigned-modify.html',
+            user.email,
+            `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
+            'email-template.html',
             emailData,
           );
+        } catch (userEmailError) {
+          console.error('Error al enviar correo al usuario:', userEmailError);
+          emailErrors.push(
+            `Usuario (${user.email}): ${userEmailError.message}`,
+          );
+        }
+
+        try {
+          const agentApprover = await this.findAgentApprover(updatedTicket.id);
+          if (agentApprover) {
+            const name = agentApprover.assignedUsers[0].user.name;
+            const lastname = agentApprover.assignedUsers[0].user.lastname;
+            const email = agentApprover.assignedUsers[0].user.email;
+            emailData['fullname'] = name + ' ' + lastname;
+            if (email) {
+              await this.emailService.sendEmail(
+                email,
+                `Modificación tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo al agente o empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Agente Aprobador: ${agentEmailError.message}`);
+        }
+
+        try {
+          if (agent) {
+            emailData['fullname'] = agent.name + ' ' + agent.lastname;
+
+            if (agent.email) {
+              await this.emailService.sendEmail(
+                agent.email,
+                `Modificación tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo al agente o empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Agente Asignado: ${agentEmailError.message}`);
+        }
+
+        try {
+          const company = await this.userService.findCompanyById(
+            user.companyId,
+          );
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+          if (company?.email) {
+            await this.emailService.sendEmail(
+              company.email,
+              `Modificación tikect ${emailData.prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned-modify.html',
+              emailData,
+            );
+          }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo al agente o empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Empresa: ${agentEmailError.message}`);
         }
       } catch (emailError) {
         console.log(emailError);
-        emailStatus =
-          'Ticket was pass to Assisted successfully, but the email notification could not be sent. Please contact Branzon Tech support';
+        if (emailErrors.length > 0) {
+          emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
+        // emailStatus =
+        //   'El ticket fue pasado a ATENDIDO exitosamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico de Branzon.';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -497,7 +1024,7 @@ export class TicketService {
     } catch (error) {
       console.error('Error in updateStatusToAssisted:', error);
       throw new InternalServerErrorException(
-        'Failed to update the ticket status.',
+        'No se pudo actualizar el estado del ticket.',
       );
     }
   }
@@ -519,20 +1046,25 @@ export class TicketService {
       });
 
       if (!ticket) {
-        throw new NotFoundException(`Ticket with ID '${id}' not found.`);
+        throw new NotFoundException(`No se encontró el ticket con ID '${id}'.`);
       }
 
       const updatedTicket = await this.ticketRepository.save(ticket);
       const user = await this.userService.findById(updatedTicket.userId);
       if (!user) {
-        throw new NotFoundException(`Error finding ticket user.`);
+        throw new NotFoundException(
+          `Error al encontrar el usuario del ticket.`,
+        );
       }
       const resultData = await this.findOne(updatedTicket.id);
-
-      let emailStatus = 'Ticket Closeted successfully';
+      this.websocketService.emit('ticket-closeted', resultData);
+      let emailStatus = 'Ticket cerrado con éxito';
       const prefix = resultData.ticketTitle.ticketCategory.prefix;
       const priority = resultData.ticketTitle.ticketPriority.title;
-
+      const emailErrors: string[] = [];
+      const agent = resultData.assignedUsers
+        ? await this.userService.findById(resultData.assignedUsers[0].userId)
+        : null;
       try {
         const emailData = {
           fullname: `${user.name} ${user.lastname}` || 'User',
@@ -546,30 +1078,94 @@ export class TicketService {
           ticketCreatedAt: resultData.createdAt,
         };
 
-        await this.emailService.sendEmail(
-          user.email,
-          `Actualizacion ${prefix}-${updatedTicket.ticketNumber}`,
-          'email-template-closet.html',
-          emailData,
-          true,
-        );
-        if (ticket.user) {
-          const agent = await this.userService.findById(
-            ticket.assignedUsers[0].userId,
-          );
-          const company = await this.userService.findById(user.companyId);
-          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+        try {
           await this.emailService.sendEmail(
-            `${agent.email},${company.email}`,
-            `Cierre tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
-            'email-template-assigned-closet.html',
+            user.email,
+            `Cierre tikect ${prefix}-${updatedTicket.ticketNumber}`,
+            'email-template-closet.html',
             emailData,
           );
+        } catch (userEmailError) {
+          console.error('Error al enviar correo al usuario:', userEmailError);
+          emailErrors.push(
+            `Usuario (${user.email}): ${userEmailError.message}`,
+          );
+        }
+
+        try {
+          const agentApprover = await this.findAgentApprover(updatedTicket.id);
+          if (agentApprover) {
+            const name = agentApprover.assignedUsers[0].user.name;
+            const lastname = agentApprover.assignedUsers[0].user.lastname;
+            const email = agentApprover.assignedUsers[0].user.email;
+            emailData['fullname'] = name + ' ' + lastname;
+            if (email) {
+              await this.emailService.sendEmail(
+                email,
+                `Cierre tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo al agente o empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Agente Aprobador: ${agentEmailError.message}`);
+        }
+
+        try {
+          if (agent) {
+            emailData['fullname'] = agent.name + ' ' + agent.lastname;
+
+            if (agent.email) {
+              await this.emailService.sendEmail(
+                agent.email,
+                `Cierre tikect ${resultData.ticketTitle.ticketCategory.prefix}-${resultData.ticketNumber}`,
+                'email-template-assigned-modify.html',
+                emailData,
+              );
+            }
+          }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo al agente o empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Agente Asignado: ${agentEmailError.message}`);
+        }
+
+        try {
+          const company = await this.userService.findCompanyById(
+            user.companyId,
+          );
+          emailData['fullname'] = agent.name + ' ' + agent.lastname;
+          if (company?.email) {
+            await this.emailService.sendEmail(
+              company.email,
+              `Cierre tikect ${emailData.prefix}-${resultData.ticketNumber}`,
+              'email-template-assigned-modify.html',
+              emailData,
+            );
+          }
+        } catch (agentEmailError) {
+          console.error(
+            'Error al enviar correo al agente o empresa:',
+            agentEmailError,
+          );
+          emailErrors.push(`Empresa: ${agentEmailError.message}`);
         }
       } catch (emailError) {
         console.log(emailError);
-        emailStatus =
-          'Ticket was pass to Closeted successfully, but the email notification could not be sent. Please contact Branzon Tech support';
+        if (emailErrors.length > 0) {
+          emailStatus = `El ticket se creó correctamente, pero ocurrieron errores al enviar correos: ${emailErrors.join(
+            ' | ',
+          )}`;
+        }
+        // emailStatus =
+        //   'El ticket fue pasado a CERRADO exitosamente, pero no se pudo enviar la notificación por correo electrónico. Contacte con el soporte técnico de Branzon.';
       }
       await this.cacheManager.delCache(`ticket:${id}`);
       await this.cacheManager.delCache(`tickets:*`);
@@ -581,8 +1177,149 @@ export class TicketService {
     } catch (error) {
       console.error('Error in updateStatusToCloseted:', error);
       throw new InternalServerErrorException(
-        'Failed to update the ticket status.',
+        'No se pudo actualizar el estado del ticket.',
       );
+    }
+  }
+
+  async updateStatusToRejected(
+    userSession: userSession,
+    id: string,
+    description: string,
+  ): Promise<{ data: Ticket[]; message: string }> {
+    const queryRunner =
+      this.ticketRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    const updatedTickets: Ticket[] = [];
+    const manager = queryRunner.manager;
+    const emailErrors: { ticketId: string; email: string; error: any }[] = [];
+
+    try {
+      const rejectedState =
+        await this.ticketStateService.findRejectedPreapprovalTicketState(
+          manager,
+        );
+      if (!rejectedState) {
+        throw new NotFoundException(
+          'Estado "Rechazado" no configurado en el sistema',
+        );
+      }
+
+      // for (const id of ids) {
+      const note = manager.create(NoteAgentTicket, {
+        description,
+        userId: userSession.id,
+        ticketId: id,
+      });
+      await manager.save(note);
+
+      const ticket = await manager.preload(Ticket, {
+        id,
+        ticketStateId: rejectedState.id,
+      });
+
+      if (!ticket) {
+        throw new NotFoundException(`No se encontró el ticket con ID '${id}'`);
+      }
+
+      const updatedTicket = await manager.save(ticket);
+
+      const existingAssignment = await manager.findOne(AssignedUserTicket, {
+        where: {
+          userId: userSession.id,
+          ticketId: id,
+        },
+      });
+
+      if (existingAssignment) {
+        existingAssignment.state = false;
+        await manager.save(existingAssignment);
+      }
+      // }
+
+      await queryRunner.commitTransaction();
+
+      // Enviar correos y limpiar caché
+      // for (const ticket of updatedTickets) {
+      const resultData = await this.findOne(id);
+      const user = await this.userService.findById(resultData.userId);
+      // if (!user) continue;
+
+      const prefix = resultData.ticketTitle.ticketCategory.prefix;
+      const priority = resultData.ticketTitle.ticketPriority.title;
+
+      const emailData = {
+        fullname: `${user.name} ${user.lastname}` || 'User',
+        ticketState: resultData.ticketState.description,
+        prefix,
+        ticketId: resultData.id,
+        userId: user.id,
+        noteAgentTicket: description,
+        ticketNumber: resultData.ticketNumber,
+        ticketTitle: resultData.ticketTitle.description,
+        ticketPriority: priority,
+        ticketCreatedAt: resultData.createdAt,
+      };
+
+      try {
+        await this.emailService.sendEmail(
+          user.email,
+          `Ticket Rechazado ${prefix}-${resultData.ticketNumber}`,
+          'email-template-rejected.html',
+          emailData,
+          true,
+        );
+      } catch (emailError) {
+        console.error(
+          'Error enviando email para ticket:',
+          ticket.id,
+          emailError,
+        );
+        emailErrors.push({
+          ticketId: ticket.id,
+          email: user.email,
+          error: emailError,
+        });
+      }
+
+      await this.cacheManager.delCache(`ticket:${ticket.id}`);
+      // }
+
+      await this.cacheManager.delCache('tickets:*');
+      await this.cacheManager.delCache('notes:*');
+
+      // Construir mensaje
+      let message = 'Ticket rechazado correctamente.';
+
+      if (emailErrors.length > 0) {
+        const errorDetails = emailErrors
+          .map(
+            (error) =>
+              `\n- Ticket ID: ${error.ticketId}, Correo: ${error.email}, Motivo: ${error.error.message || 'Error desconocido'}`,
+          )
+          .join('');
+        message += '\n\n**Errores de envío:**' + errorDetails;
+      }
+
+      return {
+        data: updatedTickets,
+        message,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+
+      console.error('Error en updateStatusToRejected:', error);
+      throw new InternalServerErrorException(
+        `Error al rechazar los tickets: ${error.message}`,
+      );
+    } finally {
+      await queryRunner.release();
     }
   }
 
@@ -630,12 +1367,51 @@ export class TicketService {
     }
   }
 
+  private async agentAssigned(
+    branchId: string,
+    lastStateId: string,
+    manager: EntityManager,
+  ): Promise<User | null> {
+    let selectedAgent: User | null = null;
+    const defaultAgents = await this.userService.findDefaultAgents(
+      branchId,
+      manager,
+    );
+    console.log('Default Agents:', defaultAgents);
+    for (const agent of defaultAgents) {
+      if (!agent.limite_ticket || agent.limite_ticket === 0) {
+        selectedAgent = agent;
+        break;
+      }
+
+      const assignedCount = await manager
+        .getRepository(AssignedUserTicket)
+        .createQueryBuilder('assigned')
+        .innerJoin('assigned.ticket', 'ticket')
+        .innerJoin('ticket.ticketState', 'state')
+        .where('assigned.userId = :userId', { userId: agent.id })
+        .andWhere('assigned.state = true')
+        .andWhere('state.id != :closeStateId', {
+          closeStateId: lastStateId,
+        })
+        .getCount();
+      console.log('assignedCount:', assignedCount);
+      console.log('agent.limite_ticket:', agent.limite_ticket);
+      if (assignedCount < agent.limite_ticket) {
+        selectedAgent = agent;
+        break;
+      }
+    }
+    return selectedAgent;
+  }
+
   async getDashboardCards(
     user: userSession,
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): Promise<{ data: any[] }> {
     try {
+      endDate = this.formatedEndDate(endDate);
       const cacheKey = `dashboard-cards:user-${user.id}:startDate-${startDate}:endDate-${endDate}`;
       const cachedData = await this.cacheManager.getCache<{ data: any[] }>(
         cacheKey,
@@ -696,46 +1472,45 @@ export class TicketService {
 
   private async countCasesCreated(
     user: userSession,
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): Promise<number> {
-    const query = this.ticketRepository
-      .createQueryBuilder('ticket')
-      .where('ticket.createdAt BETWEEN :startDate AND :endDate', {
-        startDate,
-        endDate,
-      });
+    const query = this.ticketRepository.createQueryBuilder('ticket');
 
     this.applyUserFilters(query, user);
+    query.andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
+      startDate,
+      endDate,
+    });
 
     return query.getCount();
   }
 
   private async countCasesCompleted(
     user: userSession,
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): Promise<number> {
     const lastState = await this.ticketStateService.findLastTicketState();
     if (!lastState) return 0;
 
-    const query = this.ticketRepository
-      .createQueryBuilder('ticket')
-      .where('ticket.ticketStateId = :stateId', { stateId: lastState.id })
+    const query = this.ticketRepository.createQueryBuilder('ticket');
+
+    this.applyUserFilters(query, user);
+    query
+      .andWhere('ticket.ticketStateId = :stateId', { stateId: lastState.id })
       .andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       });
-
-    this.applyUserFilters(query, user);
 
     return query.getCount();
   }
 
   private async calculateCustomerSatisfaction(
     user: userSession,
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): Promise<string> {
     const lastState = await this.ticketStateService.findLastTicketState();
     if (!lastState) return '0/5';
@@ -744,14 +1519,15 @@ export class TicketService {
       .createQueryBuilder('response')
       .select('AVG(calification.score)', 'avgScore')
       .innerJoin('response.ticket', 'ticket')
-      .innerJoin('response.surveyCalification', 'calification')
-      .where('ticket.ticketStateId = :stateId', { stateId: lastState.id })
+      .innerJoin('response.surveyCalification', 'calification');
+
+    this.applyUserFilters(query, user);
+    query
+      .andWhere('ticket.ticketStateId = :stateId', { stateId: lastState.id })
       .andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       });
-
-    this.applyUserFilters(query, user);
 
     const result = await query.getRawOne();
     const averageScore = result?.avgScore
@@ -763,47 +1539,73 @@ export class TicketService {
 
   private async calculateAverageResponseTime(
     user: userSession,
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): Promise<string> {
-    const subQuery = this.ticketDetailRepository
-      .createQueryBuilder('td')
-      .select('td.ticketId', 'ticket_id')
-      .addSelect('MIN(td.createdAt)', 'first_response_date')
-      .innerJoin('td.user', 'td_user')
-      .innerJoin('td_user.role', 'td_role')
-      .where('td_role.isAgent = true')
-      .andWhere('td.state = true')
-      .groupBy('td.ticketId');
+    const inProcessState = await this.ticketStateService.findInProcessState();
+    const closedState = await this.ticketStateService.findLastTicketState();
 
     const query = this.ticketRepository
       .createQueryBuilder('ticket')
-      .select(
-        'AVG(EXTRACT(EPOCH FROM (fr.first_response_date - ticket.createdAt)) / 60)',
-        'avgMinutes',
-      )
-
-      .innerJoin(
-        '(' + subQuery.getQuery() + ')',
-        'fr',
-        'fr.ticket_id = ticket.id',
-      )
-      .where('ticket.createdAt BETWEEN :startDate AND :endDate', {
+      .leftJoinAndSelect('ticket.branch', 'branch')
+      .leftJoinAndSelect('ticket.ticketTitle', 'ticketTitle')
+      .leftJoinAndSelect('ticketTitle.ticketPriority', 'ticketPriority')
+      .where('ticket."createdAt" BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       })
-      .andWhere('ticket.state = true')
-      .andWhere('ticket.deletedAt IS NULL')
-      .setParameters(subQuery.getParameters());
+      .andWhere('ticket."deletedAt" IS NULL')
+      .andWhere('ticket."state" = true')
+      .andWhere('ticket."updatedAt" IS NOT NULL')
+      .andWhere('ticket."ticketStateId" IN (:...validStates)', {
+        validStates: [inProcessState.id, closedState.id],
+      });
 
-    this.applyUserFilters(query, user);
+    this.applyUserFilters?.(query, user);
 
-    const result = await query.getRawOne();
-    const avgMinutes = result?.avgMinutes
-      ? Math.round(parseFloat(result.avgMinutes) * 10) / 10
-      : 0;
+    const tickets = await query.getMany();
 
-    return `${avgMinutes} min`;
+    let totalResponseHours = 0;
+    let responseCount = 0;
+
+    for (const ticket of tickets) {
+      const branchId = ticket.branchId;
+      const priority = ticket.ticketTitle?.ticketPriority;
+      const responseSlahours = priority?.hoursResponse;
+
+      if (!branchId || !responseSlahours) continue;
+
+      const laborHours = await this.laborHoursService.findAll({ branchId });
+      const holidays = await this.holidaysService.findAll({ branchId });
+
+      const responseBusinessMinutes = calculateBusinessMinutesBetweenDates(
+        ticket.createdAt,
+        ticket.updatedAt,
+        laborHours,
+        holidays,
+      );
+      const responseBusinessHours = responseBusinessMinutes / 60;
+
+      if (responseBusinessHours > 0) {
+        totalResponseHours += responseBusinessHours;
+        responseCount++;
+
+        const withinSLA = responseBusinessHours <= responseSlahours;
+        const stateLabel =
+          ticket.ticketStateId === inProcessState.id ? 'en proceso' : 'cerrado';
+
+        console.log(
+          `⏱ Ticket ${ticket.id} (${stateLabel}) → ${responseBusinessHours.toFixed(2)} horas | SLA: ${responseSlahours}h | ${withinSLA ? '✅ Cumple SLA' : '❌ No cumple SLA'}`,
+        );
+      }
+    }
+
+    const avgResponseHours =
+      responseCount > 0
+        ? (totalResponseHours / responseCount).toFixed(2)
+        : '0.00';
+
+    return `${avgResponseHours} horas`;
   }
 
   private applyUserFilters(
@@ -817,13 +1619,74 @@ export class TicketService {
     }
 
     if (isAgent) {
-      query.innerJoin('ticket.assignedUsers', 'au', 'au.userId = :userId', {
-        userId: user.id,
-      });
+      query
+        .leftJoin('ticket.assignedUsers', 'assignedUsers')
+        .andWhere('assignedUsers.userId = :agentId', {
+          agentId: user.id,
+        });
+      if (!user.isDesignatedApprover)
+        query.andWhere('assignedUsers.state = true');
     }
   }
-  async getTicketsByCategoryStats(startDate: Date, endDate: Date) {
+
+  async getTicketByDate(
+    user: userSession,
+    startDate: string,
+    endDate: string,
+  ): Promise<any> {
+    endDate = this.formatedEndDate(endDate);
+    const lastState = await this.ticketStateService.findLastTicketState();
+    if (!lastState) {
+        throw new Error('No se pudo determinar el último estado de ticket');
+      }
+    const query = this.ticketRepository.createQueryBuilder('ticket');
+
+    this.applyUserFilters(query, user);
+
+    query.andWhere('ticket.createdAt BETWEEN :startDate AND :endDate AND ticket.ticketStateId = :lastStateId', {
+      startDate,
+      endDate,
+      lastStateId: lastState.id 
+    });
+
+    query
+      .select(
+        `
+        CASE
+          WHEN ticket.updatedAt - ticket.createdAt > interval '30 days' THEN '>30 días'
+          WHEN ticket.updatedAt - ticket.createdAt BETWEEN interval '7 days' AND interval '30 days' THEN '7-30 días'
+          WHEN ticket.updatedAt - ticket.createdAt BETWEEN interval '1 days' AND interval '7 days' THEN '1-7 días'
+          WHEN ticket.updatedAt - ticket.createdAt BETWEEN interval '5 hours' AND interval '24 hours' THEN '5-24 horas'
+          ELSE '0-5 horas'
+        END
+        `,
+        'label',
+      )
+      .addSelect('COUNT(ticket.id)', 'count')
+      .groupBy('label');
+
+    const raw = await query.getRawMany();
+
+    
+    const total = raw.reduce((sum, row) => sum + Number(row.count), 0);
+
+    const series = raw.map(r => ({
+      label: r.label,
+      count: Number(r.count),
+      percentage: total > 0 ? (Number(r.count) / total * 100).toFixed(2) : '0.00',
+    }));
+
+    return { data: { title: 'Movimiento de tickets', series } };
+  }
+
+
+  async getTicketsByCategoryStats(
+    user: userSession,
+    startDate: string,
+    endDate: string,
+  ) {
     try {
+      endDate = this.formatedEndDate(endDate);
       const cacheKey = 'ticketsByCategoryStats';
       const cached = await this.cacheManager.getCache<{
         title: string;
@@ -835,11 +1698,15 @@ export class TicketService {
       if (cached) return cached;
 
       // Obtener todos los tickets con sus categorías
-      const ticketsWithCategories = await this.ticketRepository
-        .createQueryBuilder('ticket')
+      const ticketsWithCategoriesQuery =
+        await this.ticketRepository.createQueryBuilder('ticket');
+
+      this.applyUserFilters(ticketsWithCategoriesQuery, user);
+
+      const ticketsWithCategories = await ticketsWithCategoriesQuery
         .leftJoinAndSelect('ticket.ticketTitle', 'ticketTitle')
         .leftJoinAndSelect('ticketTitle.ticketCategory', 'ticketCategory')
-        .where('ticket.createdAt BETWEEN :startDate AND :endDate', {
+        .andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
           startDate,
           endDate,
         })
@@ -897,66 +1764,72 @@ export class TicketService {
 
   async getAverageResponse(
     user: userSession,
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): Promise<{
     title: string;
     description: string;
     chartData: number[];
     chartLabels: string[];
   }> {
+    endDate = this.formatedEndDate(endDate);
+
+    const inProcessState = await this.ticketStateService.findInProcessState();
+    const closedState = await this.ticketStateService.findLastTicketState();
+
     const query = this.ticketRepository
-      .createQueryBuilder('t')
-      .select('t."ticketNumber"', 'ticketNumber')
-      .addSelect('tc."prefix"', 'prefix')
-      .addSelect(
-        `
-        ROUND(EXTRACT(EPOCH FROM (
-          (
-            SELECT td."createdAt"
-            FROM "TicketDetails" td
-            INNER JOIN "Users" u ON td."userId" = u.id
-            INNER JOIN "Roles" r ON u."roleId" = r.id
-            WHERE td."ticketId" = t.id
-            AND r."isAgent" = true
-            ORDER BY td."createdAt" ASC
-            LIMIT 1
-          ) - t."createdAt"
-        )) / 60, 2)
-      `,
-        'agent_response_time_minutes',
-      )
-      .leftJoin('t.ticketTitle', 'tt')
-      .leftJoin('tt.ticketCategory', 'tc')
-      .where('t."createdAt" BETWEEN :startDate AND :endDate', {
+      .createQueryBuilder('ticket')
+      .leftJoinAndSelect('ticket.branch', 'branch')
+      .leftJoinAndSelect('ticket.ticketTitle', 'tt')
+      .leftJoinAndSelect('tt.ticketCategory', 'tc')
+      .where('ticket."createdAt" BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       })
-      .andWhere(
-        `
-        (
-          SELECT td."createdAt"
-          FROM "TicketDetails" td
-          INNER JOIN "Users" u ON td."userId" = u.id
-          INNER JOIN "Roles" r ON u."roleId" = r.id
-          WHERE td."ticketId" = t.id
-          AND r."isAgent" = true
-          ORDER BY td."createdAt" ASC
-          LIMIT 1
-        ) IS NOT NULL
-      `,
-      )
-      .orderBy('t."createdAt"', 'DESC');
+      .andWhere('ticket."ticketStateId" IN (:...validStates)', {
+        validStates: [inProcessState.id, closedState.id],
+      })
+      .andWhere('ticket."updatedAt" IS NOT NULL')
+      .andWhere('ticket.state = true')
+      .andWhere('ticket."deletedAt" IS NULL')
+      .orderBy('ticket."createdAt"', 'DESC');
 
-    this.applyUserFilters(query, user);
-    const raw = await query.getRawMany();
+    this.applyUserFilters?.(query, user);
 
-    const chartLabels = raw.map((r) => `${r.prefix}-${r.ticketNumber}`);
-    const chartData = raw.map((r) => parseFloat(r.agent_response_time_minutes));
+    const tickets = await query.getMany();
+
+    const chartLabels: string[] = [];
+    const chartData: number[] = [];
+
+    for (const ticket of tickets) {
+      const branchId = ticket.branchId;
+      const createdAt = ticket.createdAt;
+      const updatedAt = ticket.updatedAt;
+      const prefix = ticket.ticketTitle?.ticketCategory?.prefix || '';
+      const ticketNumber = ticket.ticketNumber;
+
+      if (!branchId || !createdAt || !updatedAt) continue;
+
+      const laborHours = await this.laborHoursService.findAll({ branchId });
+      const holidays = await this.holidaysService.findAll({ branchId });
+
+      const businessMinutes = calculateBusinessMinutesBetweenDates(
+        createdAt,
+        updatedAt,
+        laborHours,
+        holidays,
+      );
+
+      const hours =
+        businessMinutes > 0 ? parseFloat((businessMinutes / 60).toFixed(2)) : 0;
+
+      chartLabels.push(`${prefix}-${ticketNumber}`);
+      chartData.push(hours);
+    }
 
     return {
       title: 'Tiempo Promedio de Respuesta por Ticket',
-      description: 'Minutos hasta la primera respuesta del agente',
+      description: 'Horas hábiles entre la creación y finalización del ticket',
       chartData,
       chartLabels,
     };
@@ -964,8 +1837,8 @@ export class TicketService {
 
   async getSatisfactionByRange(
     user: userSession,
-    startDate: Date | string,
-    endDate: Date | string,
+    startDate: string,
+    endDate: string,
   ): Promise<{
     data: {
       title: string;
@@ -975,15 +1848,10 @@ export class TicketService {
     };
   }> {
     try {
-      // Manejo de formato dd/mm/yyyy si viene como string
-      startDate =
-        typeof startDate === 'string'
-          ? this.parseDateString(startDate)
-          : startDate;
-      endDate =
-        typeof endDate === 'string' ? this.parseDateString(endDate) : endDate;
+      const formatedstartDate = this.formatedstartDate(startDate);
+      const formatedEndDate = this.formatedEndDate(endDate);
 
-      const cacheKey = `satisfaction-range:${user.id}:${startDate.toISOString()}:${endDate.toISOString()}`;
+      const cacheKey = `satisfaction-range:${user.id}:${formatedstartDate}:${formatedEndDate}`;
       const cached = await this.cacheManager.getCache<{
         data: {
           title: string;
@@ -992,34 +1860,51 @@ export class TicketService {
           chartLabels: string[];
         };
       }>(cacheKey);
-      if (cached) return cached;
+      // if (cached) return cached;
 
       const rawData = await this.surveyResponseRepository
         .createQueryBuilder('response')
         .select([
-          "DATE_TRUNC('month', response.createdAt) as month",
-          'ROUND(AVG(calification.score), 0) as average_score',
+          "TO_CHAR(DATE_TRUNC('month', response.createdAt), 'YYYY-MM') as month",
+          'AVG(calification.score) as average_score',
         ])
         .innerJoin('response.surveyCalification', 'calification')
         .innerJoin('response.ticket', 'ticket')
         .where('response.createdAt BETWEEN :startDate AND :endDate', {
-          startDate,
-          endDate,
+          startDate: formatedstartDate,
+          endDate: formatedEndDate,
         })
         .groupBy("DATE_TRUNC('month', response.createdAt)")
         .orderBy('month', 'ASC')
         .getRawMany();
 
-      const { chartData, chartLabels } = this.processSatisfactionByRange(
-        rawData,
-        startDate,
-        endDate,
+      // Generar todos los meses en el rango
+      const chartData: number[] = [];
+      const chartLabels: string[] = [];
+
+      const start = new Date(formatedstartDate);
+      const end = new Date(formatedEndDate);
+      end.setDate(1); // Asegura que sea el primer día del mes
+      end.setMonth(end.getMonth() + 1); // Incluir mes final
+
+      const dataMap = new Map(
+        rawData.map((row) => [row.month, Number(row.average_score)]),
       );
+
+      const current = new Date(start);
+      current.setDate(1);
+
+      while (current < end) {
+        const key = current.toISOString().slice(0, 7); // 'YYYY-MM'
+        chartLabels.push(key);
+        chartData.push(dataMap.get(key) ?? 0);
+        current.setMonth(current.getMonth() + 1);
+      }
 
       const result = {
         data: {
           title: 'Indicador de Satisfacción',
-          description: `Evaluación desde ${startDate.toLocaleDateString()} hasta ${endDate.toLocaleDateString()}`,
+          description: `Evaluación desde ${startDate} hasta ${endDate}`,
           chartData,
           chartLabels,
         },
@@ -1035,67 +1920,72 @@ export class TicketService {
     }
   }
 
-  private processSatisfactionByRange(
-    rawData: any[],
-    startDate: Date,
-    endDate: Date,
-  ): {
-    chartData: number[];
-    chartLabels: string[];
-  } {
-    const monthNames = [
-      'Ene',
-      'Feb',
-      'Mar',
-      'Abr',
-      'May',
-      'Jun',
-      'Jul',
-      'Ago',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dic',
-    ];
-    const chartLabels: string[] = [];
-    const chartData: number[] = [];
+  // private processSatisfactionByRange(
+  //   rawData: any[],
+  //   startDate: string,
+  //   endDate: string,
+  // ): {
+  //   chartData: number[];
+  //   chartLabels: string[];
+  // } {
+  //   const monthNames = [
+  //     'Ene',
+  //     'Feb',
+  //     'Mar',
+  //     'Abr',
+  //     'May',
+  //     'Jun',
+  //     'Jul',
+  //     'Ago',
+  //     'Sep',
+  //     'Oct',
+  //     'Nov',
+  //     'Dic',
+  //   ];
+  //   const chartLabels: string[] = [];
+  //   const chartData: number[] = [];
+  //   const startDateFormated = new Date(startDate);
+  //   const endDateFormated = new Date(endDate);
 
-    // Normaliza fechas al primer día del mes
-    let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-    const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+  //   // Normaliza fechas al primer día del mes
+  //   let current = new Date(
+  //     startDateFormated.getFullYear(),
+  //     startDateFormated.getMonth(),
+  //     1,
+  //   );
+  //   const end = new Date(
+  //     endDateFormated.getFullYear(),
+  //     endDateFormated.getMonth(),
+  //     1,
+  //   );
 
-    while (current <= end) {
-      const month = current.getMonth();
-      const year = current.getFullYear();
-      const label = `${monthNames[month]} ${year}`;
-      chartLabels.push(label);
+  //   while (current <= end) {
+  //     const month = current.getMonth();
+  //     const year = current.getFullYear();
+  //     const label = `${monthNames[month]} ${year}`;
+  //     chartLabels.push(label);
 
-      // Buscar si hay un dato en rawData para ese mes
-      const row = rawData.find((r) => {
-        const d = new Date(r.month);
-        return d.getMonth() === month && d.getFullYear() === year;
-      });
+  //     // Buscar si hay un dato en rawData para ese mes
+  //     const row = rawData.find((r) => {
+  //       const d = new Date(r.month);
+  //       return d.getMonth() === month && d.getFullYear() === year;
+  //     });
 
-      chartData.push(row ? parseInt(row.average_score) : 0);
+  //     chartData.push(row ? parseInt(row.average_score) : 0);
 
-      current.setMonth(current.getMonth() + 1);
-    }
+  //     current.setMonth(current.getMonth() + 1);
+  //   }
 
-    return { chartData, chartLabels };
-  }
+  //   return { chartData, chartLabels };
+  // }
 
   async getCaseStatusByMonth(
     user: userSession,
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): Promise<DashboardChartGroupBar> {
-    // Asegura que las fechas sean válidas
-    startDate =
-      typeof startDate === 'string'
-        ? this.parseDateString(startDate)
-        : startDate;
-    endDate =
-      typeof endDate === 'string' ? this.parseDateString(endDate) : endDate;
+    startDate = this.formatedstartDate(startDate);
+    endDate = this.formatedEndDate(endDate);
 
     const stateMap = (await this.ticketStateService.findAll()).data;
 
@@ -1109,7 +1999,6 @@ export class TicketService {
 
     // Meses del rango
     const monthIndexMap = this.getMonthNamesBetween(startDate, endDate);
-
     // Consulta agrupada por mes, año y estado
     const query = this.ticketRepository
       .createQueryBuilder('ticket')
@@ -1118,8 +2007,12 @@ export class TicketService {
         `EXTRACT(YEAR FROM ticket.createdAt) as year_num`,
         `ticket.ticketStateId as stateId`,
         `COUNT(*) as count`,
-      ])
-      .where('ticket.createdAt BETWEEN :startDate AND :endDate', {
+      ]);
+
+    this.applyUserFilters(query, user);
+
+    query
+      .andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
         startDate,
         endDate,
       })
@@ -1129,8 +2022,6 @@ export class TicketService {
       .groupBy('month_num, year_num, ticket.ticketStateId')
       .orderBy('year_num', 'ASC')
       .addOrderBy('month_num', 'ASC');
-
-    this.applyUserFilters(query, user);
 
     const raw = await query.getRawMany();
 
@@ -1172,27 +2063,40 @@ export class TicketService {
     };
   }
 
-  
   async getAgentPerformance(
     user: userSession,
     options: {
       agentCount?: number;
-      startDate?: Date | string;
-      endDate?: Date | string;
+      startDate?: string;
+      endDate?: string;
       branchIds?: string[];
+      agentSearch?: string;
+      isAgentDefault?: boolean | null; // This type is correctly defined as boolean or null
     } = {},
   ): Promise<{
     data: DashboardChartGroupBar;
   }> {
     try {
-      const { agentCount = 4, startDate, endDate, branchIds } = options;
+      const {
+        agentCount = 4,
+        startDate,
+        endDate,
+        branchIds,
+        agentSearch,
+        isAgentDefault,
+      } = options;
 
-      const parsedStartDate =
-        typeof startDate === 'string' ? this.parseDateString(startDate) : startDate;
-      const parsedEndDate =
-        typeof endDate === 'string' ? this.parseDateString(endDate) : endDate;
+      const startDateFormated = this.formatedstartDate(startDate);
+      const endDateFormated = this.formatedEndDate(endDate);
 
-      const cacheKey = `agent-performance:${user.id}:${agentCount}:${parsedStartDate?.toISOString()}:${parsedEndDate?.toISOString()}:${branchIds?.join(',') || 'all'}`;
+      // --- START: Updated cacheKey to include new filters ---
+      const cacheKey = `agent-performance:${
+        user.id
+      }:${agentCount}:${startDateFormated}:${endDateFormated}:${
+        branchIds?.join(',') || 'all'
+      }:${agentSearch || ''}:${isAgentDefault !== undefined && isAgentDefault !== null ? isAgentDefault : 'all'}`;
+      // --- END: Updated cacheKey ---
+
       const cached = await this.cacheManager.getCache<{
         data: DashboardChartGroupBar;
       }>(cacheKey);
@@ -1205,32 +2109,55 @@ export class TicketService {
         throw new Error('No se pudo determinar el último estado de ticket');
       }
 
-      const categories = this.generateMonthLabels(parsedStartDate, parsedEndDate);
+      const categories = this.generateMonthLabels(
+        startDateFormated,
+        endDateFormated,
+      );
 
       // 2. Obtener todos los tickets del rango y su información
-      const rawData = await this.ticketRepository
+      const query = this.ticketRepository
         .createQueryBuilder('ticket')
         .innerJoin('ticket.assignedUsers', 'assignment')
         .innerJoin('assignment.user', 'user')
         .innerJoin('user.role', 'role')
         .innerJoin('ticket.ticketState', 'state')
         .where('role.isAgent = true')
-        // .andWhere('user.companyId = :companyId', { companyId: user.companyId })
         .andWhere('assignment.state = true')
         .andWhere('ticket.createdAt BETWEEN :startDate AND :endDate', {
-          startDate: parsedStartDate,
-          endDate: parsedEndDate,
+          startDate: startDateFormated,
+          endDate: endDateFormated,
         })
-        .andWhere('state.id = :lastStateId', { lastStateId: lastState.id })
-        .andWhere(branchIds?.length ? 'ticket.branchId IN (:...branchIds)' : '1=1', {
-          branchIds,
-        })
+        .andWhere('state.id = :lastStateId', { lastStateId: lastState.id });
+
+      // Apply branchIds filter if provided
+      if (branchIds?.length) {
+        query.andWhere('ticket.branchId IN (:...branchIds)', { branchIds });
+      }
+
+      // --- START: Apply agentSearch (ILIKE) filter ---
+      if (agentSearch) {
+        query.andWhere(
+          `(CONCAT(user.name, '',  user.lastname) ILIKE :agentSearch)`,
+          { agentSearch: `%${agentSearch}%` },
+        );
+      }
+      // --- END: Apply agentSearch filter ---
+
+      // --- START: Apply isDefaultAgent filter ---
+      if (isAgentDefault !== undefined) {
+        query.andWhere('user.isAgentDefault = :isAgentDefault', {
+          isAgentDefault,
+        });
+      }
+      // --- END: Apply isDefaultAgent filter ---
+
+      const rawData = await query
         .select([
           'user.id as user_id',
           'user.name as user_name',
           'user.lastname as user_lastname',
-          "EXTRACT(MONTH FROM ticket.createdAt) as month_num",
-          "EXTRACT(YEAR FROM ticket.createdAt) as year_num",
+          'EXTRACT(MONTH FROM ticket.createdAt) as month_num',
+          'EXTRACT(YEAR FROM ticket.createdAt) as year_num',
           'COUNT(ticket.id) as count',
         ])
         .groupBy('user.id, user.name, user.lastname, month_num, year_num')
@@ -1244,8 +2171,11 @@ export class TicketService {
 
       for (const row of rawData) {
         const agentId = row.user_id;
-        const agentName = `${row.user_name} ${row.user_lastname}`;
-        const label = this.formatMonthLabel(parseInt(row.month_num), parseInt(row.year_num));
+        const agentName = `${row.user_name} ${row.user_lastname}`; // Access directly from row.user if selected in query
+        const label = this.formatMonthLabel(
+          parseInt(row.month_num),
+          parseInt(row.year_num),
+        );
         const index = categories.indexOf(label);
 
         if (!agentMap[agentId]) {
@@ -1290,15 +2220,25 @@ export class TicketService {
     }
   }
 
-    
   private formatMonthLabel(month: number, year: number): string {
-    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const monthNames = [
+      'Ene',
+      'Feb',
+      'Mar',
+      'Abr',
+      'May',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dic',
+    ];
     return `${monthNames[month - 1]} ${year}`;
   }
 
-
-
-  private generateMonthLabels(startDate: Date, endDate: Date): string[] {
+  private generateMonthLabels(startDate: string, endDate: string): string[] {
     const monthNames = [
       'Ene',
       'Feb',
@@ -1315,11 +2255,24 @@ export class TicketService {
     ];
     const labels: string[] = [];
 
-    let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-    const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+    const parsedStartDate = new Date(startDate);
+    const parsedEndDate = new Date(endDate);
+
+    let current = new Date(
+      parsedStartDate.getFullYear(),
+      parsedStartDate.getMonth(),
+      1,
+    );
+    const end = new Date(
+      parsedEndDate.getFullYear(),
+      parsedEndDate.getMonth(),
+      1,
+    );
 
     while (current <= end) {
-      const label = `${monthNames[current.getMonth()]} ${current.getFullYear()}`;
+      const label = `${
+        monthNames[current.getMonth()]
+      } ${current.getFullYear()}`;
       labels.push(label);
       current.setMonth(current.getMonth() + 1);
     }
@@ -1327,14 +2280,19 @@ export class TicketService {
     return labels;
   }
 
-  private parseDateString(dateStr: string): Date {
+  private formatedEndDate(dateStr: string): string {
     const [day, month, year] = dateStr.split('/');
-    return new Date(Number(year), Number(month) - 1, Number(day));
+    return `${year}-${month}-${day}T23:59:59`;
+  }
+
+  private formatedstartDate(dateStr: string): string {
+    const [day, month, year] = dateStr.split('/');
+    return `${year}-${month}-${day}T00:00:00`;
   }
 
   private getMonthNamesBetween(
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
   ): { label: string; month: number; year: number }[] {
     const monthNames = [
       'Ene',
@@ -1351,12 +2309,25 @@ export class TicketService {
       'Dic',
     ];
     const result: { label: string; month: number; year: number }[] = [];
+    const parsedStartDate = new Date(startDate);
+    const parsedEndDate = new Date(endDate);
 
-    const start = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-    const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+    const start = new Date(
+      parsedStartDate.getFullYear(),
+      parsedStartDate.getMonth(),
+      1,
+    );
+    const end = new Date(
+      parsedEndDate.getFullYear(),
+      parsedEndDate.getMonth(),
+      1,
+    );
 
     let current = new Date(start);
-
+    if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+      console.error('Fechas inválidas:', { startDate, endDate });
+      // return result;
+    }
     while (current <= end) {
       result.push({
         label: `${monthNames[current.getMonth()]} ${current.getFullYear()}`,

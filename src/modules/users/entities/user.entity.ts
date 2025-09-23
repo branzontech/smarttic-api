@@ -6,6 +6,8 @@ import { AssignedUserBranch } from 'src/modules/assigned-user-branch/entities/as
 import { Ticket } from 'src/modules/ticket/entities/ticket.entity';
 import { SurveyResponse } from 'src/modules/survey-response/entities/survey-response.entity';
 import { AssignedUserTicket } from 'src/modules/assigned-user-ticket/entities/assigned-user-ticket.entity';
+import { NoteAgentTicket } from 'src/modules/note-agent-tickets/entities/note-agent-ticket.entity';
+import { Shortcut } from 'src/modules/shortcuts/entities/shortcut.entity';
 
 @Entity('Users')
 export class User {
@@ -39,11 +41,20 @@ export class User {
   @Column({nullable: true})
   numberIdentification: string;
 
-  @Column({ unique: true })
+  @Column({ unique: true, nullable: true })
   username: string;
 
   @Column()
   password: string;
+  
+  @Column({default: 0})
+  age: number;
+
+  @Column({nullable: true})
+  limite_ticket: number;
+
+  @Column({nullable: true})
+  profileImageName: string;
 
   @Column({nullable: true})
   roleId?: string;
@@ -53,6 +64,9 @@ export class User {
 
   @Column({ nullable: true })
   isAgentDefault: boolean;
+
+  @Column({ default: false })
+  isDesignatedApprover: boolean;
 
   @Column({ name: 'state', default: true })
   state: boolean;
@@ -76,11 +90,17 @@ export class User {
   @OneToMany(() => AssignedUserTicket, (assignedUserTicket) => assignedUserTicket.user)
   assignedTickets: AssignedUserTicket[];
 
+  @OneToMany(() => NoteAgentTicket, (noteAgentTicket) => noteAgentTicket.ticket)
+  agentNotes: NoteAgentTicket[];
+
   @OneToMany(() => Ticket, (ticket) => ticket.user)
   tickets: Ticket[];
 
   @OneToMany(() => SurveyResponse, (surveyResponse) => surveyResponse.user)
   surveyResponses: SurveyResponse[];
+
+  @OneToMany(() => Shortcut, (shortcut) => shortcut.user)
+  shortcuts: Shortcut[];
 
   @CreateDateColumn()
   createdAt: Date;
