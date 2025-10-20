@@ -548,6 +548,10 @@ export class UsersService {
         ),
       );
 
+      if (email) {
+        filteredUser.email = email;
+      }
+
       if (password) {
         filteredUser.password = await hash(password, 10);
       }

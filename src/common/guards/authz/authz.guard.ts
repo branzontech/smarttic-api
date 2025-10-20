@@ -64,6 +64,8 @@ export class AuthzGuard implements CanActivate {
       lastname: user.lastname,
       email: user.email,
       companyname: user.companyname,
+      age: user.age,
+      address: user.address,
       companyId: user.companyId,
       branchId: user.branchId,
       isDesignatedApprover: user.isDesignatedApprover,

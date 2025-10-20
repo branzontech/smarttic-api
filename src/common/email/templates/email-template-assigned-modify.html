@@ -78,6 +78,15 @@
             padding: 30px;
             line-height: 1.6;
         }
+        .last-message {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #e0f7da;
+            border-left: 4px solid #39b98e;
+            border-radius: 5px;
+            font-style: italic;
+            color: #0a2c35;
+        }
         .footer {
             background-color: #0a2c35;
             color: white;
@@ -207,9 +216,15 @@
         <div class="message">
             <h3>Estimado(a) {{fullname}},</h3>
             <p>Este tikect tuvo una modificacion</p>
-            
-           
-            
+            <div class="last-message">
+                <strong>Último mensaje: </strong><br>
+                {{lastMessageContent}}
+                <br><br>
+                <em>De: {{lastMessageSender}}</em><br>
+                <em>Fecha: {{lastMessageDate}}</em><br>
+               
+            </div>
+                    
             <p>Atentamente,<br>
             Smarttic</p>
         </div>

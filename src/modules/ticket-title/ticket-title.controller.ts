@@ -8,7 +8,8 @@ import {
   Delete, 
   UseGuards, 
   Query, 
-  DefaultValuePipe
+  DefaultValuePipe,
+  ParseBoolPipe
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiQuery, ApiBody, ApiParam, ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AuthzGuard } from 'src/common/guards/authz/authz.guard';
@@ -52,13 +53,18 @@ export class TicketTitleController {
   }
 
   @Get('category/:categoryId')
-  @ApiOperation({ summary: 'Retrieve a specific ticket title by category' })
+  @ApiOperation({ summary: 'Retrieve ticket titles by category' })
   @ApiParam({ name: 'categoryId', description: 'Ticket title categoryId', type: String })
-  @ApiResponse({ status: 200, description: 'Ticket title retrieved successfully' })
-  @ApiResponse({ status: 404, description: 'Ticket title not found' })
-  async findByCategory(@Param('categoryId', ParseUUIDPipe) categoryId: string) {
-    return await this.ticketTitleService.findByCategory(categoryId);
+  @ApiQuery({ name: 'includeFormless', required: false, type: Boolean })
+  @ApiResponse({ status: 200, description: 'Ticket titles retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Ticket titles not found' })
+  async findByCategory(
+    @Param('categoryId', ParseUUIDPipe) categoryId: string,
+    @Query('includeFormless', new DefaultValuePipe(false), ParseBoolPipe) includeFormless: boolean,
+  ) {
+    return await this.ticketTitleService.findByCategory(categoryId, includeFormless);
   }
+
 
   @Get('available/:categoryId?')
   @ApiOperation({ summary: 'Retrieve ticket titles by category or all unassigned' })

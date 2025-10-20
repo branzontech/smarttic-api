@@ -4,6 +4,7 @@ import {
   ConflictException,
   InternalServerErrorException,
   BadRequestException,
+  StreamableFile,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository, SelectQueryBuilder } from 'typeorm';
@@ -25,7 +26,6 @@ import { AssignedUserTicket } from '../assigned-user-ticket/entities/assigned-us
 import { SurveyResponse } from '../survey-response/entities/survey-response.entity';
 import { FormResponse } from '../form-responses/entities/form-response.entity';
 import { FormResponseFile } from '../form-response-files/entities/form-response-file.entity';
-import { TicketState } from '../ticket-state/entities/ticket-state.entity';
 import { User } from '../users/entities/user.entity';
 import { TicketTitleService } from '../ticket-title/ticket-title.service';
 import { NoteAgentTicket } from '../note-agent-tickets/entities/note-agent-ticket.entity';
@@ -35,7 +35,8 @@ import { HolidaysService } from '../holidays/holidays.service';
 import { TicketFile } from '../ticket-files/entities/ticket-file.entity';
 import { AssignedTicketFile } from '../assigned-ticket-file/entities/assigned-ticket-file.entity';
 import { WebsocketService } from 'src/common/websocket/websocket.service';
-
+import * as ExcelJS from 'exceljs';
+import { TicketDetailService } from '../ticket-detail/ticket-detail.service';
 @Injectable()
 export class TicketService {
   constructor(
@@ -61,6 +62,7 @@ export class TicketService {
     private readonly ticketTitleService: TicketTitleService,
     private readonly laborHoursService: LaborHoursService,
     private readonly holidaysService: HolidaysService,
+    private readonly ticketDetailService: TicketDetailService,
   ) {}
 
   async create(
@@ -246,10 +248,9 @@ export class TicketService {
         try {
           if (selectedAgent?.email) {
             emailData.fullname = `${selectedAgent.name} ${selectedAgent.lastname}`;
-            const recipients = `${selectedAgent.email}${company?.email ? ',' + company.email : ''}`;
-
+            
             await this.emailService.sendEmail(
-              recipients,
+              selectedAgent.email,
               `Asignación ${emailData.prefix}-${resultData.ticketNumber}`,
               'email-template-assigned.html',
               emailData,
@@ -329,6 +330,7 @@ export class TicketService {
     branchId?: string,
     startDate?: string,
     endDate?: string,
+    downloadExcel?: boolean,
   ) {
     try {
       const { isAdmin, isAgent, isConfigurator } = user.role;
@@ -340,7 +342,7 @@ export class TicketService {
         total: number;
       }>(cacheKey);
 
-      if (cachedData) return cachedData;
+      if (!downloadExcel && cachedData) return cachedData;
 
       const queryBuilder = this.ticketRepository
         .createQueryBuilder('ticket')
@@ -461,10 +463,19 @@ export class TicketService {
       }
 
       queryBuilder.orderBy('ticket."createdAt"', 'DESC');
-
+     
       const [tickets, total] = await queryBuilder.getManyAndCount();
-
+     
+      if (downloadExcel ) { 
+        const buffer= await this.generateTicketsExcel(tickets);
+        return new StreamableFile(buffer, {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          disposition: `attachment; filename="tickets.xlsx"`,
+        }); 
+      }
+ 
       const result = { data: tickets, total };
+    
       await this.cacheManager.setCache(cacheKey, result, CACHE_TTL);
 
       return result;
@@ -793,7 +804,8 @@ export class TicketService {
             `Usuario (${user.email}): ${userEmailError.message}`,
           );
         }
-
+        const ticketDetail= await this.ticketDetailService.findLastDetailByTicketId(updatedTicket.id);
+        
         try {
           const agentApprover = await this.findAgentApprover(updatedTicket.id);
           if (agentApprover) {
@@ -801,6 +813,9 @@ export class TicketService {
             const lastname = agentApprover.assignedUsers[0].user.lastname;
             const email = agentApprover.assignedUsers[0].user.email;
             emailData['fullname'] = name + ' ' + lastname;
+            emailData['lastMessageSender'] = ticketDetail.sender;
+            emailData['lastMessageContent'] = ticketDetail.content;            
+            emailData['lastMessageDate'] = ticketDetail.createdAt;            
             if (email) {
               await this.emailService.sendEmail(
                 email,
@@ -818,6 +833,9 @@ export class TicketService {
         try {
           if (agent) {
             emailData['fullname'] = agent.name + ' ' + agent.lastname;
+            emailData['lastMessageSender'] = ticketDetail.sender;
+            emailData['lastMessageContent'] = ticketDetail.content;            
+            emailData['lastMessageDate'] = ticketDetail.createdAt; 
 
             if (agent.email) {
               await this.emailService.sendEmail(
@@ -841,6 +859,9 @@ export class TicketService {
             user.companyId,
           );
           emailData['fullname'] = agent.name + ' ' + agent.lastname;
+          emailData['lastMessageSender'] = ticketDetail.sender;
+          emailData['lastMessageContent'] = ticketDetail.content;            
+          emailData['lastMessageDate'] = ticketDetail.createdAt; 
           if (company?.email) {
             await this.emailService.sendEmail(
               company.email,
@@ -939,7 +960,7 @@ export class TicketService {
             `Usuario (${user.email}): ${userEmailError.message}`,
           );
         }
-
+        const ticketDetail= await this.ticketDetailService.findLastDetailByTicketId(updatedTicket.id);
         try {
           const agentApprover = await this.findAgentApprover(updatedTicket.id);
           if (agentApprover) {
@@ -947,6 +968,9 @@ export class TicketService {
             const lastname = agentApprover.assignedUsers[0].user.lastname;
             const email = agentApprover.assignedUsers[0].user.email;
             emailData['fullname'] = name + ' ' + lastname;
+            emailData['lastMessageSender'] = ticketDetail.sender;
+            emailData['lastMessageContent'] = ticketDetail.content;            
+            emailData['lastMessageDate'] = ticketDetail.createdAt; 
             if (email) {
               await this.emailService.sendEmail(
                 email,
@@ -967,7 +991,9 @@ export class TicketService {
         try {
           if (agent) {
             emailData['fullname'] = agent.name + ' ' + agent.lastname;
-
+            emailData['lastMessageSender'] = ticketDetail.sender;
+            emailData['lastMessageContent'] = ticketDetail.content;            
+            emailData['lastMessageDate'] = ticketDetail.createdAt; 
             if (agent.email) {
               await this.emailService.sendEmail(
                 agent.email,
@@ -990,6 +1016,9 @@ export class TicketService {
             user.companyId,
           );
           emailData['fullname'] = agent.name + ' ' + agent.lastname;
+           emailData['lastMessageSender'] = ticketDetail.sender;
+            emailData['lastMessageContent'] = ticketDetail.content;            
+            emailData['lastMessageDate'] = ticketDetail.createdAt; 
           if (company?.email) {
             await this.emailService.sendEmail(
               company.email,
@@ -1091,7 +1120,7 @@ export class TicketService {
             `Usuario (${user.email}): ${userEmailError.message}`,
           );
         }
-
+        const ticketDetail= await this.ticketDetailService.findLastDetailByTicketId(updatedTicket.id);
         try {
           const agentApprover = await this.findAgentApprover(updatedTicket.id);
           if (agentApprover) {
@@ -1099,6 +1128,9 @@ export class TicketService {
             const lastname = agentApprover.assignedUsers[0].user.lastname;
             const email = agentApprover.assignedUsers[0].user.email;
             emailData['fullname'] = name + ' ' + lastname;
+            emailData['lastMessageSender'] = ticketDetail.sender;
+            emailData['lastMessageContent'] = ticketDetail.content;            
+            emailData['lastMessageDate'] = ticketDetail.createdAt; 
             if (email) {
               await this.emailService.sendEmail(
                 email,
@@ -1119,7 +1151,9 @@ export class TicketService {
         try {
           if (agent) {
             emailData['fullname'] = agent.name + ' ' + agent.lastname;
-
+            emailData['lastMessageSender'] = ticketDetail.sender;
+            emailData['lastMessageContent'] = ticketDetail.content;            
+            emailData['lastMessageDate'] = ticketDetail.createdAt; 
             if (agent.email) {
               await this.emailService.sendEmail(
                 agent.email,
@@ -1142,6 +1176,9 @@ export class TicketService {
             user.companyId,
           );
           emailData['fullname'] = agent.name + ' ' + agent.lastname;
+          emailData['lastMessageSender'] = ticketDetail.sender;
+          emailData['lastMessageContent'] = ticketDetail.content;            
+          emailData['lastMessageDate'] = ticketDetail.createdAt; 
           if (company?.email) {
             await this.emailService.sendEmail(
               company.email,
@@ -1365,6 +1402,115 @@ export class TicketService {
       console.error('Error en remove:', error);
       throw new InternalServerErrorException('No se pudo eliminar el ticket.');
     }
+  }
+
+  private async generateTicketsExcel(tickets: any[]): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Tickets');
+
+  
+    worksheet.mergeCells('A1', 'N1');
+    const titleCell = worksheet.getCell('A1');
+    titleCell.value = 'Reporte de Tickets';
+    titleCell.font = { size: 20, bold: true, color: { argb: 'FFFFFFFF' } }; // letras blancas
+    titleCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    titleCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF0B2C35' }, 
+    };
+    worksheet.getRow(1).height = 55;
+
+    
+    const headerRow = worksheet.addRow([
+      'Ticket', 'Título', 'Categoría', 'Prioridad', 'Estado', 'Sucursal',
+      'Fecha creación', 'Fecha cierre', 'Cliente', 'Tel. Cliente', 'Email Cliente',
+      'Agente', 'Tel. Agente', 'Email Agente',
+    ]);
+
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; 
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF0B2C35' }, 
+      };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' },
+      };
+    });
+    worksheet.getRow(2).height = 30;
+
+    
+    tickets.forEach((ticket, index) => {
+      const cliente = ticket.user || {};
+      const agente = ticket.assignedUsers?.[0]?.user || {};
+      const fechaCierre =
+        ticket.ticketState?.orderTicket > 3 && ticket.updatedAt
+          ? new Date(ticket.updatedAt).toLocaleString()
+          : '';
+
+      const row = worksheet.addRow([
+        `${ticket.ticketTitle?.ticketCategory?.prefix}-${ticket.ticketNumber}`,
+        ticket.ticketTitle?.description || '',
+        ticket.ticketTitle?.ticketCategory?.description || '',
+        ticket.ticketTitle?.ticketPriority?.title || '',
+        ticket.ticketState?.title || '',
+        ticket.branch?.name || '',
+        ticket.createdAt ? new Date(ticket.createdAt).toLocaleString() : '',
+        fechaCierre,
+        `${cliente.name || ''} ${cliente.lastname || ''}`.trim(),
+        cliente.phone || '',
+        cliente.email || '',
+        `${agente.name || ''} ${agente.lastname || ''}`.trim(),
+        agente.phone || '',
+        agente.email || '',
+      ]);
+
+      
+      const bgColor = index % 2 === 0 ? 'F0FCB8' : 'EFFFD9';
+
+      row.eachCell((cell, colNumber) => {
+        cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: bgColor },
+        };
+
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' },
+        };
+      });
+
+    });
+
+    
+    worksheet.columns.forEach((col) => (col.width = 22));
+
+    
+    const footerRow = worksheet.addRow([]);
+    footerRow.getCell(1).value = `Generado el: ${new Date().toLocaleString()}`;
+    worksheet.mergeCells(`A${footerRow.number}:N${footerRow.number}`);
+    footerRow.getCell(1).alignment = { horizontal: 'right', vertical: 'middle' };
+    footerRow.getCell(1).font = { italic: true, color: { argb: 'FFFFFFFF' } }; // letras blancas
+    footerRow.getCell(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF0B2C35' }, 
+    };
+    footerRow.height = 25;
+
+    const arrayBuffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(arrayBuffer);
   }
 
   private async agentAssigned(

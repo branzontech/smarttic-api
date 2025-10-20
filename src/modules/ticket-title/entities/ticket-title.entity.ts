@@ -12,10 +12,10 @@ export class TicketTitle {
   @Column({ nullable: true })
   description: string;
 
-  @Column({ nullable: true })
+  @Column()
   ticketPriorityId: string;
 
-  @Column({ nullable: true })
+  @Column()
   ticketCategoryId: string;
 
   @Column({ nullable: true })
@@ -24,10 +24,12 @@ export class TicketTitle {
   @Column({ name: 'state', default: true })
   state: boolean;
 
-  @ManyToOne(() => TicketCategory, (ticketCategory) => ticketCategory.ticketTitles, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => TicketCategory, (ticketCategory) => ticketCategory.ticketTitles, { nullable: false,
+  onDelete: 'RESTRICT' })
   ticketCategory: TicketCategory;
 
-  @ManyToOne(() => TicketPriority, (ticketPriority) => ticketPriority.ticketTitles, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => TicketPriority, (ticketPriority) => ticketPriority.ticketTitles, { nullable: false,
+  onDelete: 'RESTRICT' })
   ticketPriority: TicketPriority;
 
   @OneToMany(() => Ticket, (ticket) => ticket.ticketTitle)

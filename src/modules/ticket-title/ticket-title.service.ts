@@ -190,15 +190,21 @@ export class TicketTitleService {
 
   async findByCategory(
     ticketCategoryId: string,
+    includeFormless: boolean = false,
   ): Promise<{ data: TicketTitle[] }> {
     try {
       const cacheKey = `ticketTitle:category-${ticketCategoryId}`;
       let titles = await this.cacheManager.getCache<TicketTitle[]>(cacheKey);
 
       // if (!titles) {
-      titles = await this.ticketTitleRepository.find({
-        where: { ticketCategoryId },
-      });
+      const where: any = { ticketCategoryId };
+
+      
+      if (includeFormless) {
+        where.formId = IsNull();
+      }
+
+      titles = await this.ticketTitleRepository.find({ where });
 
       await this.cacheManager.setCache(cacheKey, titles);
       // }

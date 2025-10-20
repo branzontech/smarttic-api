@@ -16,7 +16,6 @@ export class ShortcutsService {
   ) {}
 
   async assignShortcuts(user: userSession, menuIds: string[]) {
-    console.log(user);
     await this.shortcutRepo.delete({ userId:  user.id  });
 
     if (menuIds && menuIds.length > 0) {
@@ -33,7 +32,7 @@ export class ShortcutsService {
         );
       }
 
-console.log(menus);
+
       const shortcuts = menus.map((menu) =>
         this.shortcutRepo.create({
           userId: user.id,

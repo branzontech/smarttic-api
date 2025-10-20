@@ -81,6 +81,25 @@ export class SurveyResponseController {
     return this.surveyResponseService.findAll(user, skip, take, filter);
   }
 
+  @Get("/excel")
+  @ApiOperation({ summary: 'Get all survey responses in excel' })
+  @ApiQuery({
+    name: 'filter',
+    required: false,
+    type: String,
+    description: 'Filter by description and title.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Survey responses successfully retrieved',
+  })
+  findAllExcel(
+    @CurrentUser() user: userSession,
+    @Query('filter') filter?: string,
+  ) {
+    return this.surveyResponseService.findAllExcel(user, filter);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get a specific survey response' })
   @ApiParam({ name: 'id', description: 'ID of the survey response' })

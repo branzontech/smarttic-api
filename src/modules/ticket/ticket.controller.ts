@@ -12,6 +12,7 @@ import {
   BadRequestException,
   UseInterceptors,
   UploadedFiles,
+  Res,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -129,7 +130,9 @@ export class TicketController {
     @Query('branchId') branchId?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('downloadExcel') downloadExcel?: string,
   ) {
+    const isDownloadExcel = downloadExcel === 'true';
     return await this.ticketService.findAll(
       user,
       search,
@@ -138,6 +141,7 @@ export class TicketController {
       branchId,
       startDate,
       endDate,
+      isDownloadExcel
     );
   }
 

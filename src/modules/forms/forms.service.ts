@@ -87,7 +87,7 @@ export class FormsService {
       // Filtro por texto (nombre o descripción)
       if (filter) {
         query.andWhere(
-          '(form.name LIKE :filter OR form.description LIKE :filter)',
+          '(form.name ILIKE :filter OR form.description ILIKE :filter)',
           {
             filter: `%${filter}%`,
           },

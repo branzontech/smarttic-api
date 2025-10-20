@@ -3,6 +3,8 @@ import {
   NotFoundException,
   InternalServerErrorException,
   HttpException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -33,6 +35,7 @@ export class TicketDetailService {
     private readonly assignedTicketDetailFile: Repository<AssignedTicketDetailFile>, 
     private readonly websocketService: WebsocketService,    
     private readonly ticketStateService: TicketStateService,
+     @Inject(forwardRef(() => TicketService))
     private readonly ticketService: TicketService,
     private readonly userService: UsersService,
     private readonly emailService: EmailService,
@@ -131,8 +134,14 @@ export class TicketDetailService {
           ticketTitle: resultData.ticketTitle.description,
           ticketPriority: priority,
           ticketCreatedAt: resultData.createdAt,
+          
         };
-
+        const userData =  await this.userService.findById(savedDetail.userId);
+          emailData['lastMessageSender'] = userData?.companyname?.trim()
+          ? userData.companyname
+          : `${userData?.name || ''} ${userData?.lastname || ''}`.trim();
+          emailData['lastMessageContent'] = savedDetail.description;            
+          emailData['lastMessageDate'] = savedDetail.createdAt; 
         await this.emailService.sendEmail(
           user.email,
           `Actualizado ${prefix}-${resultData.ticketNumber}`,
@@ -228,6 +237,44 @@ export class TicketDetailService {
     }
   }
 
+  async findLastDetailByTicketId(ticketId: string): Promise<{
+    id: string;
+    sender: string;
+    content: string;
+    createdAt: Date;
+  }> {
+    try {
+      const lastDetail = await this.ticketDetailRepository.findOne({
+        where: { ticketId },
+        relations: ['user', 'user.role'],
+        order: { createdAt: 'DESC' }, 
+      });
+
+      if (!lastDetail) {
+        throw new NotFoundException(
+          `No se encontró ningún detalle para el ticket con ID '${ticketId}'.`,
+        );
+      }
+
+      // Formatear el resultado
+      return {
+        id: lastDetail.id,
+        sender: lastDetail.user?.companyname?.trim()
+          ? lastDetail.user.companyname
+          : `${lastDetail.user?.name || ''} ${lastDetail.user?.lastname || ''}`.trim(),
+        content: lastDetail.description,
+        createdAt: lastDetail.createdAt,
+      };
+    } catch (error) {
+      console.error('Error en findLastDetailByTicketId:', error);
+      if (error instanceof HttpException) throw error;
+      throw new InternalServerErrorException(
+        'No se pudo obtener el último detalle del ticket.',
+      );
+    }
+  }
+
+
   async findTicketAndDetailsById(ticketId: string) {
     try {
       const cacheKey = `ticketWithDetailsArray:${ticketId}`;
@@ -307,7 +354,7 @@ export class TicketDetailService {
         userName: detail.user?.companyname?.trim()
           ? detail.user.companyname
           : `${detail.user?.name || ''} ${detail.user?.lastname || ''}`.trim(),
-        isMessageAgent: detail.user.role.isAgent,
+        isMessageAgent: detail.user.role.isAgent || detail.user.role.isAdmin,
         files: detail.ticketDetailFiles.map(tf => tf.file) || [],
         state: detail.state,
         createdAt: detail.createdAt,

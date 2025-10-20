@@ -13,6 +13,8 @@ export type userSession = {
   name: string;
   lastname: string;
   email: string;
+  age: number;
+  address: string;
   companyname: string;
   companyId: string;
   branchId: string;
